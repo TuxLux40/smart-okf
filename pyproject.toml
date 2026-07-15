@@ -1,0 +1,41 @@
+[project]
+name = "smart-okf"
+version = "0.1.0"
+description = "Local-first OKF knowledge base with co-located MDs, your LLM backend, and Honcho-inspired reasoning for sensitive documents."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.0",
+    "pyyaml",
+    "watchdog",
+    "ollama",  # or llama-cpp-python
+    "pdfplumber",
+    "easyocr",  # or tesseract via pytesseract + ocrmypdf
+    "streamlit",  # for lightweight UI (Phase 2)
+    "fastapi",    # optional for API/MCP
+    "uvicorn",
+    "python-multipart",
+    # Add more as needed: markdown, frontmatter libs if preferred over manual YAML
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "ruff",
+    "mypy",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest",
+    "ruff",
+    "mypy",
+]
+
+[tool.ruff]
+line-length = 100
+select = ["E", "F", "I", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
