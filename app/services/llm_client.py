@@ -1,7 +1,6 @@
 """LLM client wrapper for local backends (Ollama, llama.cpp, etc.)."""
 
 import os
-from typing import Any
 
 import ollama
 
@@ -31,7 +30,14 @@ class LLMClient:
         self.temperature = temperature
         self.max_tokens = max_tokens
 
-    def chat(self, system_prompt: str, user_prompt: str, **kwargs: Any) -> str:
+    def chat(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> str:
         """Run a chat completion and return the assistant response text."""
         messages = [
             {"role": "system", "content": system_prompt},
@@ -42,8 +48,8 @@ class LLMClient:
                 model=self.model,
                 messages=messages,
                 options={
-                    "temperature": kwargs.get("temperature", self.temperature),
-                    "num_predict": kwargs.get("max_tokens", self.max_tokens),
+                    "temperature": temperature if temperature is not None else self.temperature,
+                    "num_predict": max_tokens if max_tokens is not None else self.max_tokens,
                 },
             )
             content = response["message"]["content"]

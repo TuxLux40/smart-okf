@@ -1,0 +1,12 @@
+---
+description: "Python type safety — strict mypy, protocols, minimal Any"
+globs: ["**/*.py"]
+alwaysApply: false
+---
+
+Read [`PYTHON_TYPE_SAFETY.md`](../../PYTHON_TYPE_SAFETY.md) and [`rules/common/python-types.md`](../../rules/common/python-types.md).
+
+- Strict mypy; `no_implicit_optional = true`
+- Aliases in `app/types.py`; protocols in `app/services/ports.py`
+- No `**kwargs: Any`; use keyword-only overrides
+- Verify: `uv run mypy app scripts tests`

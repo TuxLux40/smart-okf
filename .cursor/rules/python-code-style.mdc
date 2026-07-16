@@ -1,0 +1,9 @@
+---
+description: "Python code style — ruff format/lint, docstrings, imports"
+globs: ["**/*.py"]
+alwaysApply: false
+---
+
+Alias for python-style rules. Read [`PYTHON_STANDARDS.md`](../../PYTHON_STANDARDS.md) and [`rules/common/python-style.md`](../../rules/common/python-style.md).
+
+Verify: `uv run ruff check . && uv run ruff format --check .`

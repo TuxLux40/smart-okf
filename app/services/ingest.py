@@ -7,6 +7,7 @@ from app.exceptions import DocumentIngestError, LLMClientError
 from app.models.okf import OKFDocument
 from app.services.llm_client import LLMClient
 from app.services.text_extraction import extract_text_from_file, is_supported_document
+from app.types import FrontmatterPatch
 
 
 @dataclass
@@ -32,7 +33,7 @@ def apply_ingest_defaults(
 ) -> OKFDocument:
     """Fill missing provenance fields without mutating the input document."""
     relative_source = str(file_path.relative_to(root))
-    frontmatter_updates: dict[str, str] = {}
+    frontmatter_updates: FrontmatterPatch = {}
 
     if not document.frontmatter.source:
         frontmatter_updates["source"] = relative_source

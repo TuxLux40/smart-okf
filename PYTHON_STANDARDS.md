@@ -3,7 +3,8 @@
 Conventions for the Python backend (`app/`, `scripts/`, `tests/`).
 **Quick checklist:** [`rules/common/python-style.md`](rules/common/python-style.md)
 
-Shared quality rules: [`CODING_STANDARDS.md`](CODING_STANDARDS.md).
+Shared quality rules: [`CODING_STANDARDS.md`](CODING_STANDARDS.md).  
+Type safety: [`PYTHON_TYPE_SAFETY.md`](PYTHON_TYPE_SAFETY.md).
 
 ---
 

@@ -22,7 +22,9 @@ Humans browse folders · agents via ripgrep / API / MCPJungle
 |------|------|
 | `app/models/okf.py` | `OKFFrontmatter`, `OKFDocument` |
 | `app/constants.py` | Shared defaults |
+| `app/types.py` | Type aliases (`RelativePath`, `FrontmatterPatch`, …) |
 | `app/exceptions.py` | `LLMClientError`, `DocumentIngestError` |
+| `app/services/ports.py` | Protocols (`ReviewQueuePort`) |
 | `app/services/ingest.py` | Folder + file ingest |
 | `app/services/llm_client.py` | Ollama chat + extraction |
 | `app/services/text_extraction.py` | PDF text (images: broken until PR 3a) |

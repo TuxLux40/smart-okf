@@ -1,4 +1,4 @@
-**smart-okf** — local-first OKF knowledge base. Read `AGENT_GUIDES.md` before coding (Python style, coding standards, `docs/DESIGN.md`).
+**smart-okf** — local-first OKF knowledge base. Read `AGENT_GUIDES.md` before coding (Python style, type safety, coding standards, `docs/DESIGN.md`).
 
 ```bash
 uv sync --group dev && uv run ruff check . && uv run mypy app scripts tests && uv run pytest -q

@@ -6,7 +6,8 @@ Read the relevant guide **before** changing code in that area.
 | Topic | Full guide | Quick reference |
 |-------|------------|-----------------|
 | **Coding (shared)** | [`CODING_STANDARDS.md`](CODING_STANDARDS.md) | [`rules/common/coding-style.md`](rules/common/coding-style.md) |
-| **Python** | [`PYTHON_STANDARDS.md`](PYTHON_STANDARDS.md) | [`rules/common/python-style.md`](rules/common/python-style.md) |
+| **Python code style** | [`PYTHON_STANDARDS.md`](PYTHON_STANDARDS.md) | [`rules/common/python-style.md`](rules/common/python-style.md) |
+| **Python type safety** | [`PYTHON_TYPE_SAFETY.md`](PYTHON_TYPE_SAFETY.md) | [`rules/common/python-types.md`](rules/common/python-types.md) |
 | **System design (Phase 0–3)** | [`docs/DESIGN.md`](docs/DESIGN.md) | PR Plan + Key Decisions sections |
 
 ## Project context
@@ -31,3 +32,5 @@ Read the relevant guide **before** changing code in that area.
 
 - **`/design`** — design-doc writer/reviewer loop; deliverable lands in `docs/DESIGN.md` when committed
 - **`/caveman-init`** — terse communication rules; see `.cursor/rules/caveman.mdc` and peers
+- **`/python-code-style`** — ruff/mypy/pytest; see `PYTHON_STANDARDS.md` and `.github/workflows/python.yml`
+- **`/python-type-safety`** — strict mypy, protocols, aliases; see `PYTHON_TYPE_SAFETY.md`
