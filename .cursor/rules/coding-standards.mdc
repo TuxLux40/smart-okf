@@ -1,0 +1,10 @@
+---
+description: "Coding standards — KISS, DRY, YAGNI, focused diffs"
+alwaysApply: true
+---
+
+Read [`CODING_STANDARDS.md`](../../CODING_STANDARDS.md) and [`rules/common/coding-style.md`](../../rules/common/coding-style.md).
+
+- Shared logic in `app/services/`; thin CLI/UI
+- No speculative features; match `docs/DESIGN.md` PR plan
+- Focused diffs only

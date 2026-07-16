@@ -1,0 +1,12 @@
+---
+description: "Python style for smart-okf — ruff, mypy, Pydantic patterns"
+globs: ["**/*.py"]
+alwaysApply: false
+---
+
+Read [`PYTHON_STANDARDS.md`](../../PYTHON_STANDARDS.md) and [`rules/common/python-style.md`](../../rules/common/python-style.md).
+
+- Line length 120, ruff format, mypy strict
+- Constants in `app/constants.py`; services in `app/services/`
+- `str | None`, typed exceptions, `model_copy` for Pydantic
+- Verify: `uv run ruff check . && uv run mypy app scripts tests && uv run pytest -q`

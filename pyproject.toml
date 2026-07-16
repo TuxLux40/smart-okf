@@ -8,14 +8,13 @@ dependencies = [
     "pydantic>=2.0",
     "pyyaml",
     "watchdog",
-    "ollama",  # or llama-cpp-python
+    "ollama",
     "pdfplumber",
-    "easyocr",  # or tesseract via pytesseract + ocrmypdf
-    "streamlit",  # for lightweight UI (Phase 2)
-    "fastapi",    # optional for API/MCP
+    "easyocr",
+    "streamlit",
+    "fastapi",
     "uvicorn",
     "python-multipart",
-    # Add more as needed: markdown, frontmatter libs if preferred over manual YAML
 ]
 
 [project.optional-dependencies]
@@ -23,19 +22,49 @@ dev = [
     "pytest",
     "ruff",
     "mypy",
+    "types-PyYAML",
 ]
 
-[tool.uv]
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "pytest",
     "ruff",
     "mypy",
+    "types-PyYAML",
 ]
 
 [tool.ruff]
-line-length = 100
-select = ["E", "F", "I", "UP"]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "W",
+    "F",
+    "I",
+    "B",
+    "C4",
+    "UP",
+    "SIM",
+]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
+warn_return_any = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

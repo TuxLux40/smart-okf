@@ -1,56 +1,58 @@
-"""LLM Client wrapper for your local backend (Ollama, llama.cpp, etc.).
-
-Configure via env or config. Supports chat/completions for extraction and reasoning.
-"""
+"""LLM client wrapper for local backends (Ollama, llama.cpp, etc.)."""
 
 import os
-from typing import Optional, List, Dict, Any
-import ollama  # pip install ollama; or replace with llama-cpp-python / requests to your endpoint
+from typing import Any
+
+import ollama
+
+from app.constants import (
+    DEFAULT_EXTRACTION_USER_SUFFIX,
+    DEFAULT_LLM_MODEL,
+    DEFAULT_LLM_TEMPERATURE,
+    DEFAULT_MAX_TOKENS,
+    DEFAULT_OLLAMA_HOST,
+)
+from app.exceptions import LLMClientError
+from app.services.prompts import load_extraction_prompt
+
 
 class LLMClient:
-    def __init__(self, 
-                 model: str = "qwen2.5:3b",  # Small dedicated model recommended for pipeline
-                 host: Optional[str] = None,  # e.g. http://localhost:11434 for Ollama
-                 temperature: float = 0.3,
-                 max_tokens: int = 2048):
+    """Chat client for extraction and reasoning tasks against a local LLM."""
+
+    def __init__(
+        self,
+        model: str = DEFAULT_LLM_MODEL,
+        host: str | None = None,
+        temperature: float = DEFAULT_LLM_TEMPERATURE,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ) -> None:
         self.model = model
-        self.host = host or os.getenv("OLLAMA_HOST", "http://localhost:11434")
+        self.host = host or os.getenv("OLLAMA_HOST", DEFAULT_OLLAMA_HOST)
         self.temperature = temperature
         self.max_tokens = max_tokens
-        # For llama.cpp or other backends, add conditional init here
 
-    def chat(self, system_prompt: str, user_prompt: str, **kwargs) -> str:
-        """Simple chat interface. Returns assistant response text."""
+    def chat(self, system_prompt: str, user_prompt: str, **kwargs: Any) -> str:
+        """Run a chat completion and return the assistant response text."""
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
+            {"role": "user", "content": user_prompt},
         ]
         try:
-            # Ollama example
             response = ollama.chat(
                 model=self.model,
                 messages=messages,
                 options={
                     "temperature": kwargs.get("temperature", self.temperature),
                     "num_predict": kwargs.get("max_tokens", self.max_tokens),
-                }
+                },
             )
-            return response['message']['content'].strip()
-        except Exception as e:
-            # Fallback or error handling for other backends
-            print(f"LLM error: {e}")
-            return f"[LLM Error] {str(e)}"
+            content = response["message"]["content"]
+            return str(content).strip()
+        except Exception as error:
+            raise LLMClientError(f"LLM request failed for model {self.model}") from error
 
     def extract_structured(self, raw_text: str, context: str = "") -> str:
-        """Convenience for extraction tasks. Load prompt from file or hardcode."""
-        from pathlib import Path
-        prompt_path = Path(__file__).parent.parent.parent / "prompts" / "extraction_system.md"
-        system = prompt_path.read_text() if prompt_path.exists() else "You are an expert at extracting durable facts into OKF format."
-        user = f"Context: {context}\n\nRaw content/OCR:\n{raw_text}\n\nOutput only valid OKF markdown with frontmatter and structured body."
-        return self.chat(system, user)
-
-    # Add methods for reasoning passes (derive, dream) similarly
-
-# Usage:
-# client = LLMClient(model="your-small-model")
-# result = client.extract_structured(ocr_text, "genealogy record")
+        """Extract structured OKF markdown from raw OCR or document text."""
+        system_prompt = load_extraction_prompt()
+        user_prompt = f"Context: {context}\n\nRaw content/OCR:\n{raw_text}{DEFAULT_EXTRACTION_USER_SUFFIX}"
+        return self.chat(system_prompt, user_prompt)

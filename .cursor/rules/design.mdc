@@ -1,0 +1,8 @@
+---
+description: "System design reference — Phase 0–3 implementation plan"
+alwaysApply: false
+---
+
+Implementation authority: [`docs/DESIGN.md`](../../docs/DESIGN.md)
+
+Check PR Plan dependencies before starting work. Key Decisions (K1–K20) override ad-hoc choices.
