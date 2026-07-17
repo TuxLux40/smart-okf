@@ -9,7 +9,52 @@ aggregate markdown file** (`<folder>/<folder-name>.md`) summarizing every suppor
 inside it — non-recursive, subfolders get their own aggregate. Everything runs locally; documents
 never leave the machine.
 
-Two operations: **ingest** (build/refresh aggregates) and **query** (answer from aggregates).
+Three operations: **onboarding** (first run only), **ingest** (build/refresh aggregates), and
+**query** (answer from aggregates).
+
+## Onboarding (first run)
+
+If no `smart-okf.yaml` exists in the skill root (`ls smart-okf.yaml`) and the user hasn't
+already told you where their documents live and which LLM to use, run this interview before
+doing anything else. This is a conversation you conduct, not a script to invoke — walk the user
+through it, don't dump all the questions at once.
+
+1. **Check system prerequisites** — run each and note what's missing, don't just assume:
+
+   ```bash
+   command -v rg && command -v tesseract && command -v gs
+   ```
+
+   `rg` (ripgrep) is needed for querying; `tesseract` for image OCR; `gs` (Ghostscript) is an
+   OCRmyPDF dependency for scanned-PDF OCR. For anything missing, detect the package manager
+   (`command -v pacman`/`apt`/`dnf`/`brew`) and give the user the exact install command —
+   **ask before running a package-manager install yourself**, since it needs sudo and touches
+   the system outside this project.
+
+2. **Detect a local LLM backend** — probe the common defaults before asking the user to type
+   a host:
+
+   ```bash
+   for url in http://localhost:11434 http://127.0.0.1:1234 http://localhost:8080; do
+     curl -s -m 2 "$url/v1/models" && echo " <- $url"
+   done
+   ```
+
+   Ollama defaults to `:11434`, LM Studio to `:1234`, llama.cpp's `llama-server` commonly to
+   `:8080`. If one responds, list its models and ask the user which to use for extraction. If
+   none respond, ask what they use and where it runs.
+
+3. **Ask where their documents live** (`document_roots` — can be more than one path) and
+   confirm the folder actually exists and looks like personal documents, not a code repo or
+   media library, before proceeding.
+
+4. **Write `smart-okf.yaml`** in the skill root from what you learned (see
+   [smart-okf.example.yaml](smart-okf.example.yaml) for the shape: `document_roots`,
+   `llm_host`, `llm_model`). This is a plain YAML file — write it directly, you don't need a
+   script for this.
+
+5. Offer to run a first ingest on one subfolder as a smoke test before ingesting everything —
+   see **Ingest cautions** below for why.
 
 ## Query (default operation)
 

@@ -7,7 +7,7 @@ Load order (lowest to highest precedence): field defaults -> smart-okf.yaml -> e
 import ipaddress
 import os
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 from urllib.parse import urlparse
 
 import yaml
@@ -24,7 +24,6 @@ from app.constants import (
     DEFAULT_LLM_TEMPERATURE,
     DEFAULT_MAX_TOKENS,
 )
-from app.models.config import FeaturesConfig
 
 DEFAULT_CONFIG_FILENAME = "smart-okf.yaml"
 DEFAULT_LLM_HOST_ALLOWLIST = ["localhost", "127.0.0.1", "::1", "0.0.0.0"]
@@ -76,35 +75,25 @@ class YamlConfigSettingsSource(PydanticBaseSettingsSource):
 
 
 class SmartOkfConfig(BaseSettings):
-    """Root application configuration."""
+    """Root application configuration.
+
+    Trimmed to fields the actual pipeline (`app/services/ingest.py`) reads. Fields from
+    the pre-rewrite design (colocation_mode, watcher_*, sqlite_path, bind_host/port, ...)
+    were removed as dead config — see the 2026-07-17/18 amendments in docs/DESIGN.md for
+    why those subsystems were cut. Re-add fields here only when the code that reads them
+    actually exists.
+    """
 
     model_config = SettingsConfigDict(env_prefix="SMART_OKF_", env_nested_delimiter="__")
 
     document_roots: list[Path] = Field(..., min_length=1)
-    colocation_mode: Literal["companion", "subdir"] = "companion"
-    kb_subdir_name: str = "_kb"
 
     llm_model: str = DEFAULT_LLM_MODEL
     llm_temperature: float = DEFAULT_LLM_TEMPERATURE
     llm_max_tokens: int = DEFAULT_MAX_TOKENS
-    llm_model_reasoning: str | None = None
     allow_remote_llm: bool = False
     llm_host_allowlist: list[str] = Field(default_factory=lambda: list(DEFAULT_LLM_HOST_ALLOWLIST))
     llm_host: str = DEFAULT_LLM_HOST
-
-    ocr_engine: Literal["pdfplumber", "easyocr", "both"] = "both"
-    watcher_enabled: bool = False
-    watcher_debounce_seconds: float = 2.0
-    dream_schedule_cron: str | None = "0 3 * * 0"
-
-    sqlite_path: Path = Path.home() / ".local/share/smart-okf/smart-okf.db"
-    job_stale_timeout_minutes: int = 30
-
-    bind_host: str = "127.0.0.1"
-    bind_port: int = 8000
-    auth_token: str | None = None
-
-    features: FeaturesConfig = Field(default_factory=FeaturesConfig)
 
     @field_validator("document_roots", mode="before")
     @classmethod
