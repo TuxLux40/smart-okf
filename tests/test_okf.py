@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from app.constants import OKF_VERSION, UNKNOWN_OKF_TYPE
+from app.constants import UNKNOWN_OKF_TYPE
 from app.models.okf import OKFDocument, OKFFrontmatter
 from app.services.ingest import apply_ingest_defaults
 
@@ -25,7 +25,7 @@ def test_round_trip_markdown_preserves_frontmatter_and_body() -> None:
     # Assert
     assert parsed.frontmatter.type == "Fact"
     assert parsed.frontmatter.title == "Birth Date"
-    assert parsed.frontmatter.okf_version == OKF_VERSION
+    assert parsed.frontmatter.okf_version is None
     assert "Born 1901" in parsed.body
 
 

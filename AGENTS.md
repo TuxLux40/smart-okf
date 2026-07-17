@@ -33,6 +33,7 @@ Humans browse folders · agents via ripgrep / API / MCPJungle
 | `scripts/ingest_folder.py` | CLI wrapper |
 | `prompts/` | LLM system prompts |
 | `docs/DESIGN.md` | Phase 0–3 system design + PR plan |
+| `docs/OKF_SPEC.md` | OKF file structure, concept format, reserved filenames, type vocabulary |
 
 ## Dev commands
 

@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app.constants import RESERVED_CONCEPT_FILENAMES
 from app.exceptions import DocumentIngestError, LLMClientError
 from app.models.okf import OKFDocument
 from app.services.llm_client import LLMClient
@@ -67,10 +68,15 @@ def ingest_document_file(
         context=str(file_path.relative_to(root)),
     )
 
+    markdown_path = co_located_markdown_path(file_path)
+    if markdown_path.name in RESERVED_CONCEPT_FILENAMES:
+        raise DocumentIngestError(
+            f"{file_path} would produce a reserved companion filename ({markdown_path.name}); rename the source file"
+        )
+
     try:
         document = OKFDocument.from_markdown(extracted_markdown)
         document = apply_ingest_defaults(document, file_path, root)
-        markdown_path = co_located_markdown_path(file_path)
         markdown_path.parent.mkdir(exist_ok=True)
         markdown_path.write_text(document.to_markdown(), encoding="utf-8")
     except DocumentIngestError:

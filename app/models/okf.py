@@ -12,7 +12,6 @@ from pydantic import BaseModel, Field
 
 from app.constants import (
     DEFAULT_LINK_LABEL,
-    OKF_VERSION,
     RELATED_SECTION_HEADING,
     UNKNOWN_OKF_TYPE,
 )
@@ -37,7 +36,8 @@ class OKFFrontmatter(BaseModel):
         description="Relative path or identifier to original document for provenance",
     )
     resource: str | None = None
-    okf_version: str = OKF_VERSION
+    okf_version: str | None = None
+    """Per OKF spec §11: only meaningful in a bundle-root index.md, not on every concept."""
 
     model_config = {
         "extra": "allow",
