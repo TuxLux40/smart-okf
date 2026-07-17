@@ -18,10 +18,10 @@ st.title("smart-okf — Local OKF Knowledge Base")
 st.caption("Co-located structured MDs + your local LLM + Honcho-inspired reasoning")
 
 st.sidebar.header("Configuration")
-llm_model = st.sidebar.text_input("LLM Model", value=os.getenv("DEFAULT_MODEL", DEFAULT_LLM_MODEL))
+llm_model = st.sidebar.text_input("LLM Model", value=os.getenv("SMART_OKF_LLM_MODEL", DEFAULT_LLM_MODEL))
 llm_host = st.sidebar.text_input(
     "LLM Host",
-    value=os.getenv("OLLAMA_HOST", DEFAULT_OLLAMA_HOST),
+    value=os.getenv("SMART_OKF_LLM_HOST", DEFAULT_OLLAMA_HOST),
 )
 doc_root = st.sidebar.text_input(
     "Document Root (test one folder first)",

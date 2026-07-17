@@ -85,12 +85,16 @@ Configure the Ollama host and model in the sidebar, then trigger ingest from the
 
 ## Configuration
 
-Configuration is via environment variables today (`app/config.py` is planned):
+`SmartOkfConfig` (`app/config.py`) loads settings in this order (lowest to highest precedence):
+defaults → `smart-okf.yaml` (or `~/.config/smart-okf/smart-okf.yaml`) → environment variables
+(`SMART_OKF_` prefix). Copy [`smart-okf.example.yaml`](smart-okf.example.yaml) to `smart-okf.yaml`
+and set at least one `document_roots` entry (required).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OLLAMA_HOST` | `http://localhost:11434` | Ollama API endpoint |
-| `DEFAULT_MODEL` | `qwen2.5:3b` | Model name for extraction |
+| `SMART_OKF_LLM_HOST` | `http://localhost:11434` | Ollama API endpoint (must be localhost/RFC1918/allowlisted unless `allow_remote_llm`) |
+| `SMART_OKF_LLM_MODEL` | `qwen2.5:3b` | Model name for extraction |
+| `SMART_OKF_CONFIG` | `smart-okf.yaml` | Path to the YAML config file |
 
 Constants live in [`app/constants.py`](app/constants.py). Supported document suffixes: `.pdf`, `.txt`, `.png`, `.jpg`, `.jpeg` (images not yet processed).
 

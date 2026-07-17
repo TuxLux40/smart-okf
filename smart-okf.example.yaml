@@ -1,0 +1,16 @@
+# Copy to smart-okf.yaml (or ~/.config/smart-okf/smart-okf.yaml) and edit.
+# Env vars override this file: SMART_OKF_<FIELD_NAME> (e.g. SMART_OKF_LLM_MODEL).
+
+document_roots:
+  - /mnt/nas/genealogy
+colocation_mode: companion
+llm_model: qwen2.5:3b
+llm_host: http://localhost:11434
+sqlite_path: ~/.local/share/smart-okf/smart-okf.db
+features:
+  derive_on_ingest: true
+  derive_sync: false
+  enrichment_gate: true
+  store_transcripts: true
+  dream_enabled: true
+  git_auto_commit: false

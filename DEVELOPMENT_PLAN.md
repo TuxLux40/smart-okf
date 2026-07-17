@@ -20,9 +20,9 @@ A self-contained, local web app + backend that turns your sensitive document fol
 
 ### Phase 0: Scaffolding & Foundations (Current — Complete this week)
 - [x] Repo structure + README + DEVELOPMENT_PLAN.
-- [ ] `pyproject.toml` with dependencies (pydantic, pyyaml, watchdog, ollama or llama-cpp-python, pdfplumber/easyocr, fastapi/streamlit, etc.).
-- [ ] Core Pydantic models for OKF frontmatter and documents.
-- [ ] LLM client wrapper (Ollama Python client or llama-cpp; support local endpoints + small model config).
+- [x] `pyproject.toml` with dependencies (pydantic, pyyaml, watchdog, ollama or llama-cpp-python, pdfplumber/easyocr, fastapi/streamlit, etc.).
+- [x] Core Pydantic models for OKF frontmatter and documents.
+- [x] LLM client wrapper (Ollama Python client or llama-cpp; support local endpoints + small model config).
 - [ ] Basic prompts in `/prompts/`:
   - `extraction_system.md`: Turn OCR/raw text into structured OKF facts + frontmatter.
   - `reasoning_derive.md`: Explicit statements + deductive conclusions from new/changed content.
