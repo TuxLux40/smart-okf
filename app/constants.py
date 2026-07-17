@@ -16,6 +16,9 @@ DEFAULT_LINK_LABEL = "Related"
 FOLDER_SUMMARY_OKF_TYPE = "FolderSummary"
 """Frontmatter `type` for the one aggregate concept written per folder (non-recursive)."""
 
+TRANSCRIPTS_DIR_NAME = ".okf-transcripts"
+"""Hidden root-level folder mirroring the tree with full raw extracted text per source file."""
+
 INDEX_FILENAME = "index.md"
 LOG_FILENAME = "log.md"
 RESERVED_CONCEPT_FILENAMES = frozenset({INDEX_FILENAME, LOG_FILENAME})

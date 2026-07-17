@@ -10,12 +10,13 @@ Ingest is incremental: each aggregate stores a SHA-256 per source file in its
 section without an LLM call; a folder whose files are all unchanged is skipped entirely.
 """
 
+import contextlib
 import hashlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from app.constants import FOLDER_SUMMARY_OKF_TYPE, RESERVED_CONCEPT_FILENAMES
+from app.constants import FOLDER_SUMMARY_OKF_TYPE, RESERVED_CONCEPT_FILENAMES, TRANSCRIPTS_DIR_NAME
 from app.exceptions import DocumentIngestError, LLMClientError
 from app.models.okf import OKFDocument, OKFFrontmatter
 from app.services.llm_client import LLMClient
@@ -77,11 +78,29 @@ def hash_file(file_path: Path) -> str:
     return digest.hexdigest()
 
 
+def transcript_path(file_path: Path, root: Path) -> Path:
+    """Return the raw-transcript sidecar path for a source file: `<root>/.okf-transcripts/<relpath>.txt`."""
+    relative = file_path.relative_to(root)
+    return root / TRANSCRIPTS_DIR_NAME / relative.parent / f"{relative.name}.txt"
+
+
+def write_transcript(file_path: Path, root: Path, raw_text: str) -> None:
+    """Store the full raw extracted text so OCR/extraction never has to repeat.
+
+    Aggregates are curated LLM output; the transcript is the lossless record agents
+    (or a future re-ingest with a better model) can reuse without touching the original.
+    """
+    target = transcript_path(file_path, root)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(raw_text, encoding="utf-8")
+
+
 def extract_document(file_path: Path, root: Path, client: LLMClient) -> OKFDocument:
-    """Extract and structure one document into an OKF document (no write)."""
+    """Extract and structure one document into an OKF document (no aggregate write)."""
     raw_text = extract_text_from_file(file_path)
     if not raw_text.strip():
         raise DocumentIngestError(f"No extractable text in {file_path}")
+    write_transcript(file_path, root, raw_text)
 
     extracted_markdown = client.extract_structured(
         raw_text,
@@ -151,7 +170,9 @@ def ingest_folder(
     if verbose:
         print(f"Scanning {root}...")
 
-    directories = [root] + sorted(p for p in root.rglob("*") if p.is_dir())
+    directories = [root] + sorted(
+        p for p in root.rglob("*") if p.is_dir() and not any(part.startswith(".") for part in p.relative_to(root).parts)
+    )
     for directory in directories:
         _ingest_directory(directory, root, llm_client, result, verbose=verbose)
 
@@ -191,6 +212,10 @@ def _ingest_directory(
 
     if existing is not None and current_hashes == old_hashes:
         result.unchanged_dirs.append(directory)
+        for file_path in files:
+            if not transcript_path(file_path, root).exists():
+                with contextlib.suppress(DocumentIngestError):
+                    write_transcript(file_path, root, extract_text_from_file(file_path))
         if verbose:
             print(f"Unchanged: {directory}")
         return
@@ -205,6 +230,11 @@ def _ingest_directory(
         if reusable and file_path.name in old_sections:
             sections.append(old_sections[file_path.name])
             ingested_files.append(file_path)
+            if not transcript_path(file_path, root).exists():
+                # Backfill: local re-extraction is LLM-free, so a missing transcript
+                # (files ingested before the transcript store existed) is cheap to fix.
+                with contextlib.suppress(DocumentIngestError):
+                    write_transcript(file_path, root, extract_text_from_file(file_path))
             continue
 
         if verbose:

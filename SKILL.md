@@ -16,23 +16,41 @@ Two operations: **ingest** (build/refresh aggregates) and **query** (answer from
 
 Answer questions from existing aggregates — no LLM server needed, they're plain markdown.
 
-1. Find candidate aggregates with ripgrep. Aggregates are named after their folder and carry
-   `type: FolderSummary` frontmatter:
+**Always search the entire documents root, never just the topically-named folder.** Real-life
+processes cut across the folder taxonomy: a Grundsicherung (government assistance) form needs
+data from `finances/` AND `insurances/` AND `providers/` AND `apartments/`; a legal dispute
+with an energy provider spans `providers/`, `finances/`, and `lawyers/`. Answering "help with
+finances" from `finances/` alone silently misses reference numbers, dates, and amounts that
+live elsewhere — the single most common failure mode this KB exists to prevent.
+
+1. Find candidate aggregates with ripgrep **from the root**. Aggregates are named after their
+   folder and carry `type: FolderSummary` frontmatter:
 
    ```bash
    rg -l --glob '*.md' 'type: FolderSummary' /path/to/documents      # list all aggregates
-   rg -i -C3 'vodafone|kündigungsfrist' /path/to/documents --glob '*.md'   # content search
+   rg -i -C3 'vodafone|kündigungsfrist' /path/to/documents --glob '*.md'   # content search, whole tree
    ```
 
 2. Read the matching aggregate(s). Each has YAML frontmatter (`sources:` lists the original
    files) and one `## <Title>` body section per source document with `_Source: <filename>_`
    provenance lines.
 
-3. Answer, citing the source document filename(s) from the provenance lines — not just the
+3. When an aggregate's summary is too thin for the question (a specific amount, a full
+   reference number, exact wording), read the **raw transcript** instead of re-extracting:
+   `<root>/.okf-transcripts/<relative-path>.txt` holds the complete extracted text of every
+   ingested file. Search it directly: `rg -i 'aktenzeichen' /path/to/documents/.okf-transcripts/`.
+
+4. Answer, citing the source document filename(s) from the provenance lines — not just the
    aggregate. If the aggregate looks stale or thin (the folder has more source files than
    `sources:` lists), say so and offer to re-ingest that folder.
 
 If no aggregate exists for the relevant folder yet, offer to ingest it first.
+
+## Change tracking
+
+The documents root is a git repository — commit after each ingest run so agents can diff what
+changed (`git -C /path/to/documents log --stat`, `git diff HEAD~1 -- '*.md'`). Use it to answer
+"what's new since last month" questions and to safely revert a bad aggregate or OCR pass.
 
 ## Ingest
 
@@ -46,11 +64,16 @@ SMART_OKF_LLM_MODEL=gemma-4-e4b-it-qat \
 uv run python scripts/ingest_folder.py /path/to/documents
 ```
 
-- Supported: `.pdf`, `.txt`, `.docx`, `.eml`, `.csv`, `.xlsx`. Standalone images
-  (`.png`/`.jpg`) are skipped with a clear message — image OCR not implemented yet.
+- Supported: `.pdf`, `.txt`, `.docx`, `.eml`, `.csv`, `.xlsx`, and images (`.png`/`.jpg`/`.jpeg`
+  via tesseract OCR, read-only).
 - **Scanned PDFs are OCRed in place**: OCRmyPDF (deu+eng) embeds a text layer into the
   original PDF when it has none, so OCR runs once per document ever — later ingests and PDF
   editors reuse the embedded layer. This rewrites the PDF file itself (content preserved).
+  Standalone images are never modified — their OCR text lives in the transcript store and
+  aggregate only.
+- **Every extraction writes a raw transcript** to `<root>/.okf-transcripts/<relpath>.txt` —
+  the lossless full text, so OCR/extraction never needs to repeat and agents can read exact
+  wording without touching originals.
 - **Ingest is incremental**: each aggregate stores SHA-256 hashes of its sources in
   frontmatter (`source_hashes`). Re-runs skip unchanged files entirely — no LLM calls, no
   rewrites — so scheduled re-ingests of a mostly-static tree are cheap. Only changed, new, or

@@ -122,3 +122,26 @@ def test_inner_headings_are_demoted_so_sections_survive_reingest(tmp_path: Path)
     text = aggregate_path.read_text(encoding="utf-8")
     assert "Detail line" in text  # reused section kept its full body
     assert "More" in text
+
+
+def test_ingest_writes_raw_transcripts_to_hidden_root_folder(tmp_path: Path) -> None:
+    providers = tmp_path / "providers"
+    providers.mkdir()
+    (providers / "isp.txt").write_text("ISP contract raw text", encoding="utf-8")
+
+    ingest_folder(str(tmp_path), client=_StubLLMClient())  # type: ignore[arg-type]
+
+    transcript = tmp_path / ".okf-transcripts" / "providers" / "isp.txt.txt"
+    assert transcript.read_text(encoding="utf-8") == "ISP contract raw text"
+
+
+def test_ingest_walk_skips_hidden_directories(tmp_path: Path) -> None:
+    hidden = tmp_path / ".git"
+    hidden.mkdir()
+    (hidden / "config.txt").write_text("not a document", encoding="utf-8")
+
+    client = _StubLLMClient()
+    result = ingest_folder(str(tmp_path), client=client)  # type: ignore[arg-type]
+
+    assert client.calls == 0
+    assert result.written_paths == []

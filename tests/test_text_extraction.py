@@ -16,7 +16,7 @@ def test_is_supported_document_covers_new_suffixes() -> None:
 
 
 @pytest.mark.parametrize("suffix", [".png", ".jpg", ".jpeg"])
-def test_extract_text_from_file_fails_fast_for_images(tmp_path: Path, suffix: str) -> None:
+def test_extract_text_from_unreadable_image_raises_clear_ocr_error(tmp_path: Path, suffix: str) -> None:
     image_path = tmp_path / f"scan{suffix}"
     image_path.write_bytes(b"\x89PNG fake bytes")
 

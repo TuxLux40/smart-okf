@@ -3,10 +3,12 @@
 Scanned PDFs (no text layer) are OCRed **in place** with OCRmyPDF before extraction:
 the text layer is embedded into the original PDF (searchable/editable ever after) and
 never needs re-running — post-OCR the PDF has text, so the OCR branch is skipped on
-later ingests.
+later ingests. Standalone images are OCRed read-only via tesseract (images have no
+embeddable text layer, so their text lives only in the transcript/aggregate).
 """
 
 import os
+import subprocess
 import tempfile
 from email import message_from_bytes
 from email.message import Message
@@ -29,7 +31,7 @@ def extract_text_from_file(file_path: Path) -> str:
     """Extract text from a supported document."""
     suffix = file_path.suffix.lower()
     if suffix in IMAGE_DOCUMENT_SUFFIXES:
-        raise DocumentIngestError(f"Image OCR not yet implemented for {file_path} (planned: PR 3a/3b)")
+        return _extract_text_from_image(file_path)
     if suffix == ".pdf":
         return _extract_text_from_pdf(file_path)
     if suffix == ".docx":
@@ -84,6 +86,24 @@ def ocr_pdf_in_place(file_path: Path) -> None:
     except Exception as error:
         temp_path.unlink(missing_ok=True)
         raise DocumentIngestError(f"OCR failed for {file_path}") from error
+
+
+def _extract_text_from_image(file_path: Path) -> str:
+    """OCR a standalone image via tesseract (read-only; the image is not modified)."""
+    try:
+        completed = subprocess.run(
+            ["tesseract", str(file_path), "stdout", "-l", OCR_LANGUAGES],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            check=True,
+            timeout=300,
+        )
+    except FileNotFoundError as error:
+        raise DocumentIngestError(f"tesseract not installed; cannot OCR {file_path}") from error
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        raise DocumentIngestError(f"OCR failed for {file_path}") from error
+    return completed.stdout
 
 
 def _extract_text_from_docx(file_path: Path) -> str:
