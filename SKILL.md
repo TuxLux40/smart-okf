@@ -101,6 +101,20 @@ uv run python scripts/ingest_folder.py /path/to/documents
 - `index.md` and `log.md` are reserved OKF filenames; a folder literally named `index` or `log`
   is skipped rather than overwriting them.
 
+## OpenWebUI integration
+
+If pointing an OpenWebUI Knowledge collection at this folder tree: **sync only the `.md`
+aggregates, never the raw document folder.** OpenWebUI's folder sync has no filter — it will
+also pick up PDFs, images, and stray temp files it can't parse and may hang on (observed:
+hung on a `.jpg` in a `temp/`-style folder). Point the sync at a filtered view instead:
+
+```bash
+find /path/to/documents -name '*.md' -not -path '*/.okf-transcripts/*'
+```
+
+or symlink/copy just the `.md` files into a separate folder OpenWebUI syncs from, keeping the
+real tree (originals + aggregates) untouched.
+
 ## Conventions (short form)
 
 - Frontmatter: `type` required (`FolderSummary` for aggregates); `sources:` lists original file
