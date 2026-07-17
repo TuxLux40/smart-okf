@@ -43,6 +43,7 @@ Humans browse folders · agents via ripgrep / API / MCPJungle
 - **Python** ≥ 3.11
 - **[uv](https://docs.astral.sh/uv/)** (recommended) or pip
 - **[Ollama](https://ollama.com/)** running locally with a small model (default: `qwen2.5:3b`)
+- **[ripgrep](https://github.com/BurntSushi/ripgrep)** (`rg`) — required for agent/CLI search over the knowledge base
 
 ```bash
 ollama pull qwen2.5:3b

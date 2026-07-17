@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.0",
+    "pydantic-settings",
     "pyyaml",
     "watchdog",
     "ollama",
@@ -15,6 +16,9 @@ dependencies = [
     "fastapi",
     "uvicorn",
     "python-multipart",
+    "structlog",
+    "mcp",
+    "portalocker",
 ]
 
 [project.optional-dependencies]
