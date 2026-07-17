@@ -3,7 +3,8 @@
 from pathlib import Path
 
 DEFAULT_LLM_MODEL = "qwen2.5:3b"
-DEFAULT_OLLAMA_HOST = "http://localhost:11434"
+DEFAULT_LLM_HOST = "http://localhost:11434"
+"""Any OpenAI-compatible chat completions server: Ollama, llama.cpp server, vLLM, OpenAI, etc."""
 DEFAULT_LLM_TEMPERATURE = 0.3
 DEFAULT_MAX_TOKENS = 2048
 
@@ -22,5 +23,8 @@ EXTRACTION_PROMPT_FILE = "extraction_system.md"
 DEFAULT_EXTRACTION_PROMPT = "You are an expert at extracting durable facts into OKF format."
 DEFAULT_EXTRACTION_USER_SUFFIX = "\n\nOutput only valid OKF markdown with frontmatter and structured body."
 
-SUPPORTED_DOCUMENT_SUFFIXES = frozenset({".pdf", ".png", ".jpg", ".jpeg", ".txt"})
+IMAGE_DOCUMENT_SUFFIXES = frozenset({".png", ".jpg", ".jpeg"})
+"""Accepted but not yet extractable: OCR pipeline lands in a later PR."""
+
+SUPPORTED_DOCUMENT_SUFFIXES = frozenset({".pdf", ".txt", ".docx", ".eml", ".csv", ".xlsx"}) | IMAGE_DOCUMENT_SUFFIXES
 TEXT_FILE_ENCODING = "utf-8"

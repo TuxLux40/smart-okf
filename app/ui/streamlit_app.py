@@ -9,19 +9,19 @@ from pathlib import Path
 
 import streamlit as st
 
-from app.constants import DEFAULT_LLM_MODEL, DEFAULT_OLLAMA_HOST
+from app.constants import DEFAULT_LLM_HOST, DEFAULT_LLM_MODEL
 from app.services.ingest import ingest_folder
 from app.services.llm_client import LLMClient
 
 st.set_page_config(page_title="smart-okf", layout="wide")
 st.title("smart-okf — Local OKF Knowledge Base")
-st.caption("Co-located structured MDs + your local LLM + Honcho-inspired reasoning")
+st.caption("Co-located structured MDs + your LLM (Ollama, llama.cpp, or any OpenAI-compatible server) + reasoning")
 
 st.sidebar.header("Configuration")
 llm_model = st.sidebar.text_input("LLM Model", value=os.getenv("SMART_OKF_LLM_MODEL", DEFAULT_LLM_MODEL))
 llm_host = st.sidebar.text_input(
     "LLM Host",
-    value=os.getenv("SMART_OKF_LLM_HOST", DEFAULT_OLLAMA_HOST),
+    value=os.getenv("SMART_OKF_LLM_HOST", DEFAULT_LLM_HOST),
 )
 doc_root = st.sidebar.text_input(
     "Document Root (test one folder first)",

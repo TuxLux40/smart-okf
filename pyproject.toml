@@ -9,9 +9,11 @@ dependencies = [
     "pydantic-settings",
     "pyyaml",
     "watchdog",
-    "ollama",
+    "openai",
     "pdfplumber",
     "easyocr",
+    "python-docx",
+    "openpyxl",
     "streamlit",
     "fastapi",
     "uvicorn",
@@ -27,6 +29,7 @@ dev = [
     "ruff",
     "mypy",
     "types-PyYAML",
+    "types-openpyxl",
 ]
 
 [dependency-groups]
@@ -35,6 +38,7 @@ dev = [
     "ruff",
     "mypy",
     "types-PyYAML",
+    "types-openpyxl",
 ]
 
 [tool.ruff]

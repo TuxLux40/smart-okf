@@ -26,7 +26,7 @@ Humans browse folders · agents via ripgrep / API / MCPJungle
 | `app/exceptions.py` | `LLMClientError`, `DocumentIngestError` |
 | `app/services/ports.py` | Protocols (`ReviewQueuePort`) |
 | `app/services/ingest.py` | Folder + file ingest |
-| `app/services/llm_client.py` | Ollama chat + extraction |
+| `app/services/llm_client.py` | OpenAI-compatible chat + extraction (Ollama, llama.cpp, vLLM, …) |
 | `app/services/text_extraction.py` | PDF text (images: broken until PR 3a) |
 | `app/services/prompts.py` | Load prompt markdown |
 | `app/ui/streamlit_app.py` | Skeleton UI |
@@ -56,8 +56,9 @@ uv run streamlit run app/ui/streamlit_app.py
 
 | Variable | Default |
 |----------|---------|
-| `OLLAMA_HOST` | `http://localhost:11434` |
-| `DEFAULT_MODEL` | `qwen2.5:3b` (see `DEFAULT_LLM_MODEL` in constants) |
+| `SMART_OKF_LLM_HOST` | `http://localhost:11434` (any OpenAI-compatible server: Ollama, llama.cpp, vLLM, …) |
+| `SMART_OKF_LLM_MODEL` | `qwen2.5:3b` (see `DEFAULT_LLM_MODEL` in constants) |
+| `SMART_OKF_LLM_API_KEY` | `not-needed` |
 
 ## Key conventions
 

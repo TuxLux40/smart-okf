@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-**smart-okf** — local-first OKF (Open Knowledge Format) knowledge base for sensitive documents. Turns folders of PDFs/scans/text into co-located structured Markdown companions (`contract.pdf` → `contract.md`) using a local LLM (Ollama), with no cloud calls. Phase 0 (scaffolding) is current; see roadmap below.
+**smart-okf** — local-first OKF (Open Knowledge Format) knowledge base for sensitive documents. Turns folders of PDFs/scans/text into co-located structured Markdown companions (`contract.pdf` → `contract.md`) using any OpenAI-compatible LLM (Ollama, llama.cpp, vLLM, …), with no cloud calls required. Phase 0 (scaffolding) is current; see roadmap below.
 
 Read [`AGENTS.md`](AGENTS.md) first — it has the module map, dev commands, and key conventions. This file adds Claude-specific notes on top.
 
@@ -43,7 +43,7 @@ Humans browse folders · agents via ripgrep / API / MCPJungle
 ```
 
 - **OKF documents** (`app/models/okf.py`): `OKFFrontmatter` (Pydantic, `extra: allow`, required `type`, provenance via `source`) + `OKFDocument` (frontmatter + markdown body). `to_markdown`/`from_markdown` round-trip the `---` YAML frontmatter block; `add_link` appends to a `## Related` section in the body.
-- **Ingest pipeline** (`app/services/ingest.py`): walks a folder, extracts text (`text_extraction.py` — PDF via pdfplumber; image OCR not yet wired, fails until PR 3a), sends it to `llm_client.py` (Ollama chat, configured via `OLLAMA_HOST`/`DEFAULT_MODEL`), and writes the co-located `.md` companion via the OKF model.
+- **Ingest pipeline** (`app/services/ingest.py`): walks a folder, extracts text (`text_extraction.py` — PDF via pdfplumber, plus `.docx`/`.eml`/`.csv`/`.xlsx`; image OCR not yet wired, fails fast), sends it to `llm_client.py` (any OpenAI-compatible chat completions server, configured via `SMART_OKF_LLM_HOST`/`SMART_OKF_LLM_MODEL`), and writes the co-located `.md` companion via the OKF model.
 - **Prompts** live in `prompts/*.md` and are loaded by `app/services/prompts.py`; `reasoning_derive.md`/`reasoning_dream.md` exist but are not yet wired into any pipeline (planned "Honcho-inspired" store → derive → dream → query loop).
 - **`app/services/ports.py`** defines Protocols (e.g. `ReviewQueuePort`) for pieces not yet implemented — code against the protocol, not a concrete class, when building against planned Phase 1+ components.
 - **Immutability convention**: ingest defaults are applied via `apply_ingest_defaults()` + `model_copy` rather than mutating frontmatter in place.

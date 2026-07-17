@@ -19,10 +19,10 @@ from pydantic_settings import (
 )
 
 from app.constants import (
+    DEFAULT_LLM_HOST,
     DEFAULT_LLM_MODEL,
     DEFAULT_LLM_TEMPERATURE,
     DEFAULT_MAX_TOKENS,
-    DEFAULT_OLLAMA_HOST,
 )
 from app.models.config import FeaturesConfig
 
@@ -90,7 +90,7 @@ class SmartOkfConfig(BaseSettings):
     llm_model_reasoning: str | None = None
     allow_remote_llm: bool = False
     llm_host_allowlist: list[str] = Field(default_factory=lambda: list(DEFAULT_LLM_HOST_ALLOWLIST))
-    llm_host: str = DEFAULT_OLLAMA_HOST
+    llm_host: str = DEFAULT_LLM_HOST
 
     ocr_engine: Literal["pdfplumber", "easyocr", "both"] = "both"
     watcher_enabled: bool = False

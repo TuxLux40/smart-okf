@@ -1,22 +1,31 @@
 # smart-okf
 
-**Local-first OKF knowledge base** for sensitive documents — co-located Markdown companions, local LLM extraction, and Honcho-inspired reasoning (store → derive → dream → query). Everything stays on your machine.
+**Local-first OKF knowledge base** for sensitive documents — co-located Markdown companions, your own LLM for extraction, and Honcho-inspired reasoning (store → derive → dream → query). Everything stays on your machine.
 
 Turn folder hierarchies of PDFs, scans, and text files into structured, browsable, agent-parseable knowledge without sending data to the cloud.
+
+## Why not just use X?
+
+Mature alternatives exist and are worth considering first:
+
+- **[Paperless-ngx](https://docs.paperless-ngx.com/)** — mature, self-hosted document management with OCR, full-text search, and a "Correspondents" concept (doctors, insurers, ISPs). Covers most of the "find my documents" need out of the box.
+- **OpenWebUI RAG** — point a Knowledge collection straight at a folder of PDFs; zero custom pipeline.
+
+Neither gives you **all three** of: local LLM-extracted structured facts, files that stay plain markdown next to the originals (not locked in a DB — `git clone` and `cat` are enough to read the whole thing), and a format any agent can traverse without a bespoke SDK or API call. That combination — human-browsable + agent-parseable + no server required to read it — is smart-okf's reason to exist. If you only need document search/retrieval and don't care about the co-located, git-portable, no-server-needed property, Paperless-ngx or OpenWebUI RAG will get you there faster.
 
 ## Features
 
 | Capability | Status |
 |------------|--------|
 | Co-located OKF `.md` companions (`file.pdf` → `file.md`) | ✅ |
-| PDF + plain-text ingest via local Ollama | ✅ |
+| PDF, `.txt`, `.docx`, `.eml`, `.csv`, `.xlsx` ingest via any OpenAI-compatible LLM | ✅ |
 | Pydantic OKF models with YAML frontmatter | ✅ |
 | CLI folder ingest | ✅ |
 | Streamlit UI skeleton | ⚠️ Placeholder |
-| Image OCR (`.png`, `.jpg`) | ❌ Not yet — fails until PR 3a |
-| Folder watcher, `index.md`, enrichment gate | ❌ Planned |
-| Derive / Dream reasoning loop | ❌ Prompts exist, not wired |
-| FastAPI REST + MCP tools | ❌ Planned |
+| Image OCR (`.png`, `.jpg`) | ❌ Not yet — fails fast until OCR lands |
+| Folder watcher, `index.md`, enrichment gate | ❌ Planned, optional |
+| Derive / Dream reasoning loop | ❌ Prompts exist, not wired, optional |
+| FastAPI REST + MCP tools | ❌ Planned, optional |
 
 See [`docs/DESIGN.md`](docs/DESIGN.md) for the full system design and phased PR plan.
 
@@ -33,8 +42,8 @@ Humans browse folders · agents via ripgrep / API / MCPJungle
 ```
 
 1. Point smart-okf at a document folder.
-2. Supported files are read (PDF via pdfplumber, `.txt` as UTF-8).
-3. A local LLM (Ollama) extracts structured facts into [OKF](https://github.com/google/okf) markdown.
+2. Supported files are read (PDF via pdfplumber; `.docx`, `.eml`, `.csv`, `.xlsx`, `.txt` natively).
+3. Your LLM extracts structured facts into [OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) markdown — any server speaking the OpenAI chat completions API: Ollama, llama.cpp's `llama-server`, vLLM, LM Studio, or a hosted OpenAI-compatible endpoint.
 4. Companion `.md` files are written next to the originals with provenance in frontmatter (`source` field).
 5. Humans browse folders directly; agents query via ripgrep, API, or MCP (planned).
 
@@ -42,10 +51,11 @@ Humans browse folders · agents via ripgrep / API / MCPJungle
 
 - **Python** ≥ 3.11
 - **[uv](https://docs.astral.sh/uv/)** (recommended) or pip
-- **[Ollama](https://ollama.com/)** running locally with a small model (default: `qwen2.5:3b`)
+- **An OpenAI-compatible LLM server** running locally or reachable on your network — [Ollama](https://ollama.com/), [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server`, vLLM, LM Studio, etc. Configure via `SMART_OKF_LLM_HOST` / `smart-okf.yaml` (default assumes Ollama on `localhost:11434`).
 - **[ripgrep](https://github.com/BurntSushi/ripgrep)** (`rg`) — required for agent/CLI search over the knowledge base
 
 ```bash
+# Example with Ollama:
 ollama pull qwen2.5:3b
 ```
 
@@ -81,7 +91,7 @@ documents/
 uv run streamlit run app/ui/streamlit_app.py
 ```
 
-Configure the Ollama host and model in the sidebar, then trigger ingest from the **Ingest** tab.
+Configure the LLM host and model in the sidebar, then trigger ingest from the **Ingest** tab.
 
 ## Configuration
 
@@ -92,11 +102,12 @@ and set at least one `document_roots` entry (required).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SMART_OKF_LLM_HOST` | `http://localhost:11434` | Ollama API endpoint (must be localhost/RFC1918/allowlisted unless `allow_remote_llm`) |
+| `SMART_OKF_LLM_HOST` | `http://localhost:11434` | Any OpenAI-compatible `/v1/chat/completions` endpoint (must be localhost/RFC1918/allowlisted unless `allow_remote_llm`) |
 | `SMART_OKF_LLM_MODEL` | `qwen2.5:3b` | Model name for extraction |
+| `SMART_OKF_LLM_API_KEY` | `not-needed` | API key, if your server requires one (local servers usually don't) |
 | `SMART_OKF_CONFIG` | `smart-okf.yaml` | Path to the YAML config file |
 
-Constants live in [`app/constants.py`](app/constants.py). Supported document suffixes: `.pdf`, `.txt`, `.png`, `.jpg`, `.jpeg` (images not yet processed).
+Constants live in [`app/constants.py`](app/constants.py). Supported document suffixes: `.pdf`, `.txt`, `.docx`, `.eml`, `.csv`, `.xlsx` (`.png`/`.jpg`/`.jpeg` accepted but fail fast — OCR not yet processed).
 
 ## OKF Output Format
 
@@ -109,7 +120,6 @@ title: Contract Review
 description: Summary of key terms and dates
 tags: [legal, contract]
 source: contracts/2024/contract.pdf
-okf_version: "0.1"
 ---
 
 ## Key Facts
@@ -141,7 +151,7 @@ app/
 ├── models/okf.py         # OKFFrontmatter, OKFDocument
 ├── services/
 │   ├── ingest.py         # Folder + file ingest
-│   ├── llm_client.py     # Ollama chat + extraction
+│   ├── llm_client.py     # OpenAI-compatible chat + extraction
 │   ├── text_extraction.py
 │   └── prompts.py
 └── ui/streamlit_app.py   # Skeleton UI
@@ -170,12 +180,12 @@ Details: [`docs/DESIGN.md`](docs/DESIGN.md) · legacy notes: [`DEVELOPMENT_PLAN.
 - **Privacy & local-only** — no cloud by default; processing on your hardware (Proxmox, NAS, laptop).
 - **Human + agent usable** — browse folders natively; agents follow links, indices, and frontmatter.
 - **OKF native** — portable, git-friendly, structured markdown with provenance.
-- **Your LLM backend** — Ollama today; llama.cpp and others planned.
+- **Your LLM backend** — any OpenAI-compatible chat completions server: Ollama, llama.cpp, vLLM, LM Studio.
 - **Honcho-inspired loop** — ingest events → background reasoning → persistent insights in co-located MDs.
 
 ## Related
 
-Inspired by understory (Codacus), Karpathy's LLM-wiki approach, and Google's [Open Knowledge Format](https://github.com/google/okf). Honcho loop concept adapted for local LLM + document KB.
+Inspired by understory (Codacus), Karpathy's LLM-wiki approach, and Google's [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf). Honcho loop concept adapted for local LLM + document KB. Format details: [`docs/OKF_SPEC.md`](docs/OKF_SPEC.md).
 
 Homelab integrations planned: MCPJungle, OpenWebUI, Tailscale LAN access.
 
