@@ -8,19 +8,11 @@ dependencies = [
     "pydantic>=2.0",
     "pydantic-settings",
     "pyyaml",
-    "watchdog",
     "openai",
     "pdfplumber",
-    "easyocr",
+    "ocrmypdf",
     "python-docx",
     "openpyxl",
-    "streamlit",
-    "fastapi",
-    "uvicorn",
-    "python-multipart",
-    "structlog",
-    "mcp",
-    "portalocker",
 ]
 
 [project.optional-dependencies]

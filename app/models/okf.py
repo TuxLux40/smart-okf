@@ -39,6 +39,10 @@ class OKFFrontmatter(BaseModel):
         default_factory=list,
         description="Relative paths of multiple source documents, for a folder-level aggregate concept",
     )
+    source_hashes: dict[str, str] = Field(
+        default_factory=dict,
+        description="SHA-256 per source filename; lets re-ingest skip unchanged files entirely",
+    )
     resource: str | None = None
     okf_version: str | None = None
     """Per OKF spec §11: only meaningful in a bundle-root index.md, not on every concept."""

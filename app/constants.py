@@ -26,8 +26,11 @@ EXTRACTION_PROMPT_FILE = "extraction_system.md"
 DEFAULT_EXTRACTION_PROMPT = "You are an expert at extracting durable facts into OKF format."
 DEFAULT_EXTRACTION_USER_SUFFIX = "\n\nOutput only valid OKF markdown with frontmatter and structured body."
 
+OCR_LANGUAGES = "deu+eng"
+"""Tesseract language packs used by OCRmyPDF for scanned PDFs."""
+
 IMAGE_DOCUMENT_SUFFIXES = frozenset({".png", ".jpg", ".jpeg"})
-"""Accepted but not yet extractable: OCR pipeline lands in a later PR."""
+"""Accepted but not yet extractable: standalone-image OCR lands later (PDFs OCR fine)."""
 
 SUPPORTED_DOCUMENT_SUFFIXES = frozenset({".pdf", ".txt", ".docx", ".eml", ".csv", ".xlsx"}) | IMAGE_DOCUMENT_SUFFIXES
 TEXT_FILE_ENCODING = "utf-8"

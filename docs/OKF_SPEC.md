@@ -39,8 +39,9 @@ documents/
 ```
 
 Implemented in `app/services/ingest.py`: `extract_document()` runs one LLM extraction per source
-file (individual quality preserved), `build_folder_summary()` merges the results into one
-`OKFDocument` per folder, `folder_summary_path()` names it after the folder.
+file (individual quality preserved), `_ingest_directory()` merges the results (reusing sections for
+unchanged files via `source_hashes`) into one `OKFDocument` per folder, `folder_summary_path()`
+names it after the folder.
 
 ## Reserved filenames
 
@@ -64,15 +65,16 @@ for an underlying asset, if any), `tags`, `timestamp`.
 **smart-okf extension fields (not in upstream OKF v0.1):** `source` — relative path to the original
 ingested file, for a concept describing exactly one document. `sources` — list of relative paths,
 for a folder-level aggregate describing several documents (what `app/services/ingest.py` produces
-by default). This is our provenance mechanism since we ingest local documents rather than
-cataloging existing resources.
+by default). `source_hashes` — SHA-256 per source filename on aggregates; powers incremental
+re-ingest (unchanged files are never re-sent to the LLM). This is our provenance mechanism since
+we ingest local documents rather than cataloging existing resources.
 
 **`okf_version`:** per §11 of the spec, this belongs only in a bundle-root `index.md`'s
 frontmatter (the one exception where `index.md` carries frontmatter) — not on every concept.
 `OKFFrontmatter.okf_version` defaults to `None` and is only set when a document explicitly opts in.
 
 Example of a single-document concept (this is also the shape of what `extract_document()` produces
-per source file before `build_folder_summary()` merges several of them into one `FolderSummary`
+per source file before ingest merges several of them into one `FolderSummary`
 aggregate — see the Types table below):
 
 ```markdown

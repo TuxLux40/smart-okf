@@ -21,9 +21,9 @@ Neither gives you **all three** of: local LLM-extracted structured facts, files 
 | PDF, `.txt`, `.docx`, `.eml`, `.csv`, `.xlsx` ingest via any OpenAI-compatible LLM | ✅ |
 | Pydantic OKF models with YAML frontmatter | ✅ |
 | CLI folder ingest | ✅ |
-| Streamlit UI skeleton | ⚠️ Placeholder |
-| Image OCR (`.png`, `.jpg`) | ❌ Not yet — fails fast until OCR lands |
-| Scheduled ingest (cron/systemd timer) | ⚠️ Manual CLI today; add your own schedule |
+| Scanned-PDF OCR, embedded in the PDF (OCRmyPDF, deu+eng) | ✅ |
+| Standalone image OCR (`.png`, `.jpg`) | ❌ Not yet — skipped with clear message |
+| Scheduled ingest (cron/systemd timer), hash-incremental re-runs | ✅ Same CLI, add a crontab line |
 | `index.md`, enrichment gate, derive/dream reasoning, FastAPI, MCP | ❌ Optional/later — only if the simple loop below isn't enough |
 
 See [`docs/DESIGN.md`](docs/DESIGN.md) (2026-07-17 scope amendment at the top) for the full system design, what's cut, and why.
@@ -87,13 +87,20 @@ documents/
     └── birth.pdf
 ```
 
-### 2. Streamlit UI (skeleton)
+### 2. Use as an agent skill
 
-```bash
-uv run streamlit run app/ui/streamlit_app.py
+The repo root is a [SKILL.md](SKILL.md) skill package — symlink it into your agent's skill
+directory (e.g. `~/.claude/skills/smart-okf`) and Claude Code (or any skill-aware agent) can
+ingest and query the knowledge base on request. Cron uses the same CLI:
+
+```
+0 3 * * 0  cd /path/to/smart-okf && uv run python scripts/ingest_folder.py /path/to/documents --host http://127.0.0.1:1234 --model <model>
 ```
 
-Configure the LLM host and model in the sidebar, then trigger ingest from the **Ingest** tab.
+Re-runs are incremental: aggregates carry SHA-256 hashes per source (`source_hashes`
+frontmatter), unchanged files are never re-sent to the LLM. Scanned PDFs get their OCR text
+layer embedded in place (OCRmyPDF, deu+eng) — OCR runs once per document, ever, and the text
+stays usable in PDF editors.
 
 ## Configuration
 
@@ -164,11 +171,11 @@ app/
 ├── exceptions.py         # LLMClientError, DocumentIngestError
 ├── models/okf.py         # OKFFrontmatter, OKFDocument
 ├── services/
-│   ├── ingest.py         # Per-folder aggregate ingest (non-recursive)
+│   ├── ingest.py         # Per-folder aggregate ingest (non-recursive, hash-incremental)
 │   ├── llm_client.py     # OpenAI-compatible chat + extraction
-│   ├── text_extraction.py
+│   ├── text_extraction.py  # PDF/docx/eml/xlsx + in-place OCRmyPDF
 │   └── prompts.py
-└── ui/streamlit_app.py   # Skeleton UI
+SKILL.md                  # Agent skill entry point
 prompts/                  # LLM system prompts
 scripts/ingest_folder.py  # CLI wrapper
 docs/DESIGN.md            # System design + PR plan

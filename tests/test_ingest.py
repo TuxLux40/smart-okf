@@ -6,7 +6,11 @@ from app.services.ingest import folder_summary_path, ingest_folder
 
 
 class _StubLLMClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
     def extract_structured(self, raw_text: str, context: str = "") -> str:
+        self.calls += 1
         return f"---\ntype: Fact\ndescription: extracted\n---\n\nExtracted: {raw_text.strip()}"
 
 
@@ -51,6 +55,37 @@ def test_ingest_is_not_recursive_across_folder_boundaries(tmp_path: Path) -> Non
     parent_summary = (parent / "health.md").read_text(encoding="utf-8")
     assert "visit.txt" not in parent_summary
     assert "summary.txt" in parent_summary
+
+
+def test_reingest_of_unchanged_folder_makes_no_llm_calls(tmp_path: Path) -> None:
+    (tmp_path / "notes.txt").write_text("Some notes", encoding="utf-8")
+
+    first_client = _StubLLMClient()
+    ingest_folder(str(tmp_path), client=first_client)  # type: ignore[arg-type]
+    assert first_client.calls == 1
+
+    second_client = _StubLLMClient()
+    result = ingest_folder(str(tmp_path), client=second_client)  # type: ignore[arg-type]
+
+    assert second_client.calls == 0
+    assert result.written_paths == []
+    assert result.unchanged_dirs == [tmp_path]
+
+
+def test_reingest_only_reextracts_changed_files(tmp_path: Path) -> None:
+    (tmp_path / "stable.txt").write_text("Stays the same", encoding="utf-8")
+    (tmp_path / "edited.txt").write_text("Version one", encoding="utf-8")
+    ingest_folder(str(tmp_path), client=_StubLLMClient())  # type: ignore[arg-type]
+
+    (tmp_path / "edited.txt").write_text("Version two", encoding="utf-8")
+    client = _StubLLMClient()
+    result = ingest_folder(str(tmp_path), client=client)  # type: ignore[arg-type]
+
+    assert client.calls == 1
+    aggregate = (tmp_path / f"{tmp_path.name}.md").read_text(encoding="utf-8")
+    assert "Version two" in aggregate
+    assert "Stays the same" in aggregate
+    assert result.written_paths == [tmp_path / f"{tmp_path.name}.md"]
 
 
 def test_ingest_skips_folder_named_after_reserved_filename(tmp_path: Path) -> None:

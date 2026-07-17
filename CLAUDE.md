@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-**smart-okf** — local-first OKF (Open Knowledge Format) knowledge base for sensitive documents. Turns folders of PDFs/scans/text into co-located structured Markdown companions (`contract.pdf` → `contract.md`) using any OpenAI-compatible LLM (Ollama, llama.cpp, vLLM, …), with no cloud calls required. Phase 0 (scaffolding) is current; see roadmap below.
+**smart-okf** — local-first OKF (Open Knowledge Format) knowledge base for sensitive documents, packaged as an agent skill (`SKILL.md` at repo root). Turns document folders into one aggregate Markdown file per folder (`providers/` → `providers/providers.md`, non-recursive) using any OpenAI-compatible LLM (LM Studio, llama.cpp, Ollama, vLLM), with no cloud calls required. No webapp, no daemons — agents invoke the skill, cron runs the same CLI.
 
 Read [`AGENTS.md`](AGENTS.md) first — it has the module map, dev commands, and key conventions. This file adds Claude-specific notes on top.
 
@@ -21,11 +21,10 @@ uv run pytest -q
 # Single test
 uv run pytest tests/test_okf.py::test_name -q
 
-# Ingest a folder (manual smoke test)
-uv run python scripts/ingest_folder.py /path/to/docs
+# Ingest a folder (incremental — unchanged files skipped via source_hashes)
+uv run python scripts/ingest_folder.py /path/to/docs --host http://127.0.0.1:1234 --model <model>
 
-# Streamlit UI (skeleton)
-uv run streamlit run app/ui/streamlit_app.py
+
 ```
 
 CI (`.github/workflows/python.yml`) runs the same ruff/mypy/pytest checks on push/PR to `main`.
@@ -34,20 +33,18 @@ CI (`.github/workflows/python.yml`) runs the same ruff/mypy/pytest checks on pus
 
 ```
 Document folders (local storage)
-        ↓ watcher / manual ingest
-app/services/ingest.py  →  text_extraction  →  llm_client  →  OKF .md
-        ↓ (planned)
-KB manager, enrichment, derive/dream, search, API, MCP
+        ↓ manual or cron-scheduled ingest (incremental via source_hashes)
+app/services/ingest.py  →  text_extraction (+ in-place OCRmyPDF)  →  llm_client  →  one OKF .md per folder
         ↓
-Humans browse folders · agents via ripgrep / API / MCPJungle
+Humans browse folders · agents query via the smart-okf skill + ripgrep
 ```
 
 - **OKF documents** (`app/models/okf.py`): `OKFFrontmatter` (Pydantic, `extra: allow`, required `type`, provenance via `source`) + `OKFDocument` (frontmatter + markdown body). `to_markdown`/`from_markdown` round-trip the `---` YAML frontmatter block; `add_link` appends to a `## Related` section in the body.
-- **Ingest pipeline** (`app/services/ingest.py`): walks a folder, extracts text (`text_extraction.py` — PDF via pdfplumber, plus `.docx`/`.eml`/`.csv`/`.xlsx`; image OCR not yet wired, fails fast), sends it to `llm_client.py` (any OpenAI-compatible chat completions server, configured via `SMART_OKF_LLM_HOST`/`SMART_OKF_LLM_MODEL`), and writes the co-located `.md` companion via the OKF model.
+- **Ingest pipeline** (`app/services/ingest.py`): walks a folder tree; per directory (non-recursive) extracts text from each supported file (`text_extraction.py` — pdfplumber plus in-place OCRmyPDF for scanned PDFs; `.docx`/`.eml`/`.csv`/`.xlsx` native; standalone images skipped), runs one LLM extraction per changed file (`llm_client.py`, any OpenAI-compatible server via `SMART_OKF_LLM_HOST`/`SMART_OKF_LLM_MODEL`), and merges results into one `FolderSummary` aggregate per folder. Incremental: `source_hashes` frontmatter (SHA-256 per source) lets unchanged files reuse their existing aggregate section without an LLM call; in-place OCR rewrites the PDF, so hashes are recomputed after extraction.
 - **Prompts** live in `prompts/*.md` and are loaded by `app/services/prompts.py`; `reasoning_derive.md`/`reasoning_dream.md` exist but are not yet wired into any pipeline (planned "Honcho-inspired" store → derive → dream → query loop).
 - **`app/services/ports.py`** defines Protocols (e.g. `ReviewQueuePort`) for pieces not yet implemented — code against the protocol, not a concrete class, when building against planned Phase 1+ components.
 - **Immutability convention**: ingest defaults are applied via `apply_ingest_defaults()` + `model_copy` rather than mutating frontmatter in place.
-- Everything else (KB manager, folder watcher, `index.md` generation, enrichment gate, FastAPI + MCP tools, Streamlit UI beyond the current skeleton) is planned, not built — check `docs/DESIGN.md` (Phase 0–3 PR plan) before assuming a component exists.
+- Everything else (`index.md` generation, enrichment gate, derive/dream reasoning, API) is optional/later, not built — see the 2026-07-17 scope amendment at the top of `docs/DESIGN.md` before assuming a component exists or resurrecting cut scope (watcher, per-file companions, Streamlit, FastAPI, MCP server).
 
 ## Code style
 
@@ -59,9 +56,9 @@ Full detail in [`PYTHON_STANDARDS.md`](PYTHON_STANDARDS.md), [`PYTHON_TYPE_SAFET
 
 ## Key conventions
 
-- OKF markdown = YAML frontmatter + body; `source` provenance field is required for anything ingested from a real document.
-- Co-located companions only: never write knowledge output anywhere but next to the source file as `<name>.md`.
-- Follow the PR-by-PR implementation order in `docs/DESIGN.md` rather than jumping ahead to later-phase features.
+- OKF markdown = YAML frontmatter + body; provenance is required for ingested content (`sources` + `source_hashes` on aggregates, `source` on single-document concepts). Format rules: `docs/OKF_SPEC.md`.
+- Knowledge output lives inside the document folders (one aggregate per folder); never write it anywhere else.
+- `index.md`/`log.md` are reserved OKF filenames — never concept/aggregate names.
 
 ## IDE/agent rule duplication
 

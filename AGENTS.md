@@ -8,12 +8,10 @@ Local-first OKF knowledge base: co-located Markdown companions next to sensitive
 
 ```
 Document folders (local storage)
-        ↓ watcher / manual ingest
-app/services/ingest.py  →  text_extraction  →  llm_client  →  OKF .md
-        ↓ (planned)
-KB manager, enrichment, derive/dream, search, API, MCP
+        ↓ manual or cron-scheduled ingest (incremental via source_hashes)
+app/services/ingest.py  →  text_extraction (+ in-place OCRmyPDF)  →  llm_client  →  one OKF .md per folder
         ↓
-Humans browse folders · agents via ripgrep / API / MCPJungle
+Humans browse folders · agents query via the smart-okf skill + ripgrep
 ```
 
 ## Module map (current)
@@ -25,12 +23,11 @@ Humans browse folders · agents via ripgrep / API / MCPJungle
 | `app/types.py` | Type aliases (`RelativePath`, `FrontmatterPatch`, …) |
 | `app/exceptions.py` | `LLMClientError`, `DocumentIngestError` |
 | `app/services/ports.py` | Protocols (`ReviewQueuePort`) |
-| `app/services/ingest.py` | Folder + file ingest |
+| `app/services/ingest.py` | Per-folder aggregate ingest (non-recursive, hash-incremental) |
 | `app/services/llm_client.py` | OpenAI-compatible chat + extraction (Ollama, llama.cpp, vLLM, …) |
-| `app/services/text_extraction.py` | PDF text (images: broken until PR 3a) |
+| `app/services/text_extraction.py` | PDF/docx/eml/csv/xlsx text + in-place OCRmyPDF for scanned PDFs |
 | `app/services/prompts.py` | Load prompt markdown |
-| `app/ui/streamlit_app.py` | Skeleton UI |
-| `scripts/ingest_folder.py` | CLI wrapper |
+| `scripts/ingest_folder.py` | CLI wrapper (cron-friendly, --host/--model flags) |
 | `prompts/` | LLM system prompts |
 | `docs/DESIGN.md` | Phase 0–3 system design + PR plan |
 | `docs/OKF_SPEC.md` | OKF file structure, concept format, reserved filenames, type vocabulary |
@@ -45,11 +42,10 @@ uv run ruff check --fix . && uv run ruff format .
 uv run mypy app scripts tests
 uv run pytest -q
 
-# Ingest test folder
-uv run python scripts/ingest_folder.py /path/to/docs
+# Ingest test folder (incremental; unchanged files skipped via source_hashes)
+uv run python scripts/ingest_folder.py /path/to/docs --host http://127.0.0.1:1234 --model <model>
 
-# Streamlit UI
-uv run streamlit run app/ui/streamlit_app.py
+
 ```
 
 ## Environment
@@ -62,10 +58,10 @@ uv run streamlit run app/ui/streamlit_app.py
 
 ## Key conventions
 
-- OKF markdown: YAML frontmatter + body; `source` provenance required
-- Co-located companions: `file.pdf` → `file.md`
+- OKF markdown: YAML frontmatter + body; provenance required (`sources` + `source_hashes` on aggregates)
+- One aggregate per folder: `providers/` → `providers/providers.md` (non-recursive)
 - Immutable ingest defaults via `apply_ingest_defaults()` + `model_copy`
-- Implementation order: follow PR plan in `docs/DESIGN.md`
+- Scope: see 2026-07-17 amendment in `docs/DESIGN.md`; SKILL.md is the agent entry point
 
 ---
 

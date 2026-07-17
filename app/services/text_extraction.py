@@ -1,5 +1,13 @@
-"""Text extraction helpers for ingest pipeline."""
+"""Text extraction helpers for ingest pipeline.
 
+Scanned PDFs (no text layer) are OCRed **in place** with OCRmyPDF before extraction:
+the text layer is embedded into the original PDF (searchable/editable ever after) and
+never needs re-running — post-OCR the PDF has text, so the OCR branch is skipped on
+later ingests.
+"""
+
+import os
+import tempfile
 from email import message_from_bytes
 from email.message import Message
 from pathlib import Path
@@ -8,7 +16,7 @@ import openpyxl
 import pdfplumber
 from docx import Document as DocxDocument
 
-from app.constants import IMAGE_DOCUMENT_SUFFIXES, SUPPORTED_DOCUMENT_SUFFIXES, TEXT_FILE_ENCODING
+from app.constants import IMAGE_DOCUMENT_SUFFIXES, OCR_LANGUAGES, SUPPORTED_DOCUMENT_SUFFIXES, TEXT_FILE_ENCODING
 from app.exceptions import DocumentIngestError
 
 
@@ -34,7 +42,16 @@ def extract_text_from_file(file_path: Path) -> str:
 
 
 def _extract_text_from_pdf(file_path: Path) -> str:
-    """Extract plain text from a PDF using pdfplumber."""
+    """Extract plain text from a PDF; OCR scanned PDFs in place first."""
+    text = _read_pdf_text(file_path)
+    if text.strip():
+        return text
+    ocr_pdf_in_place(file_path)
+    return _read_pdf_text(file_path)
+
+
+def _read_pdf_text(file_path: Path) -> str:
+    """Extract the existing text layer from a PDF using pdfplumber."""
     pages: list[str] = []
     with pdfplumber.open(file_path) as pdf:
         for page in pdf.pages:
@@ -42,6 +59,31 @@ def _extract_text_from_pdf(file_path: Path) -> str:
             if page_text:
                 pages.append(page_text)
     return "\n".join(pages)
+
+
+def ocr_pdf_in_place(file_path: Path) -> None:
+    """Embed an OCR text layer into a scanned PDF, replacing the original atomically.
+
+    Uses OCRmyPDF with `--skip-text` so pages that already carry text are untouched.
+    The embedded layer persists in the PDF itself — later ingests and PDF editors get
+    the text for free.
+    """
+    import ocrmypdf
+
+    with tempfile.NamedTemporaryFile(suffix=".pdf", dir=file_path.parent, delete=False) as temp:
+        temp_path = Path(temp.name)
+    try:
+        ocrmypdf.ocr(
+            file_path,
+            temp_path,
+            language=OCR_LANGUAGES,
+            skip_text=True,
+            progress_bar=False,
+        )
+        os.replace(temp_path, file_path)
+    except Exception as error:
+        temp_path.unlink(missing_ok=True)
+        raise DocumentIngestError(f"OCR failed for {file_path}") from error
 
 
 def _extract_text_from_docx(file_path: Path) -> str:

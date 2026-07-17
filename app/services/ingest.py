@@ -1,11 +1,17 @@
-"""Document ingest helpers shared by CLI and UI.
+"""Document ingest helpers shared by CLI and agents.
 
 Writes one aggregate OKF markdown file per folder (non-recursive: a folder's aggregate
 covers only the files directly inside it, not files in subfolders) rather than one
 companion per source document, to keep folders with many documents from becoming
 cluttered with individual `.md` files.
+
+Ingest is incremental: each aggregate stores a SHA-256 per source file in its
+`source_hashes` frontmatter. On re-ingest, unchanged files reuse their existing body
+section without an LLM call; a folder whose files are all unchanged is skipped entirely.
 """
 
+import hashlib
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -16,6 +22,8 @@ from app.services.llm_client import LLMClient
 from app.services.text_extraction import extract_text_from_file, is_supported_document
 from app.types import FrontmatterPatch
 
+_SOURCE_MARKER_PATTERN = re.compile(r"^_Source: (?P<name>.+)_$", re.MULTILINE)
+
 
 @dataclass
 class IngestFolderResult:
@@ -23,6 +31,7 @@ class IngestFolderResult:
 
     root: Path
     written_paths: list[Path] = field(default_factory=list)
+    unchanged_dirs: list[Path] = field(default_factory=list)
     skipped: list[tuple[Path, str]] = field(default_factory=list)
 
     @property
@@ -59,6 +68,15 @@ def folder_summary_path(directory: Path) -> Path:
     return directory / f"{directory.name}.md"
 
 
+def hash_file(file_path: Path) -> str:
+    """Return the streaming SHA-256 hex digest of a file."""
+    digest = hashlib.sha256()
+    with file_path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def extract_document(file_path: Path, root: Path, client: LLMClient) -> OKFDocument:
     """Extract and structure one document into an OKF document (no write)."""
     raw_text = extract_text_from_file(file_path)
@@ -76,36 +94,36 @@ def extract_document(file_path: Path, root: Path, client: LLMClient) -> OKFDocum
     return apply_ingest_defaults(document, file_path, root)
 
 
-def build_folder_summary(
-    directory: Path,
-    root: Path,
-    documents: list[tuple[Path, OKFDocument]],
-) -> OKFDocument:
-    """Merge per-file extractions into one folder-level aggregate OKF document."""
-    tags: list[str] = []
-    for _, document in documents:
-        for tag in document.frontmatter.tags:
-            if tag not in tags:
-                tags.append(tag)
+def render_section(file_path: Path, document: OKFDocument) -> str:
+    """Render one source document's body section for the folder aggregate."""
+    heading = document.frontmatter.title or file_path.name
+    return f"## {heading}\n\n_Source: {file_path.name}_\n\n{document.body}"
 
-    sources = [str(file_path.relative_to(root)) for file_path, _ in documents]
-    relative_dir = directory.relative_to(root)
-    frontmatter = OKFFrontmatter(
-        type=FOLDER_SUMMARY_OKF_TYPE,
-        title=directory.name.replace("_", " ").title(),
-        description=f"Aggregated extraction of {len(documents)} document(s) in {relative_dir or '.'}",
-        tags=tags,
-        source=None,
-        sources=sources,
-    )
 
-    sections = []
-    for file_path, document in documents:
-        heading = document.frontmatter.title or file_path.name
-        sections.append(f"## {heading}\n\n_Source: {file_path.name}_\n\n{document.body}")
-    body = "\n\n".join(sections)
+def parse_existing_sections(summary: OKFDocument) -> dict[str, str]:
+    """Map source filename -> full body section from an existing aggregate.
 
-    return OKFDocument(frontmatter=frontmatter, body=body)
+    Sections are `## ...` blocks carrying an `_Source: <filename>_` marker line; the
+    marker (not the heading) identifies the source file, since headings come from
+    LLM-extracted titles that may change between runs.
+    """
+    sections: dict[str, str] = {}
+    blocks = re.split(r"(?=^## )", summary.body, flags=re.MULTILINE)
+    for block in blocks:
+        marker = _SOURCE_MARKER_PATTERN.search(block)
+        if marker:
+            sections[marker.group("name")] = block.strip()
+    return sections
+
+
+def load_existing_summary(summary_path: Path) -> OKFDocument | None:
+    """Load a previously written aggregate, or None if absent/unreadable."""
+    if not summary_path.is_file():
+        return None
+    try:
+        return OKFDocument.from_markdown(summary_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
 
 
 def ingest_folder(
@@ -131,7 +149,10 @@ def ingest_folder(
         _ingest_directory(directory, root, llm_client, result, verbose=verbose)
 
     if verbose:
-        print(f"Ingest complete. Wrote {len(result.written_paths)} folder summary file(s).")
+        print(
+            f"Ingest complete. Wrote {len(result.written_paths)} aggregate(s), "
+            f"{len(result.unchanged_dirs)} folder(s) unchanged."
+        )
 
     return result
 
@@ -156,25 +177,65 @@ def _ingest_directory(
         )
         return
 
-    documents: list[tuple[Path, OKFDocument]] = []
+    current_hashes = {f.name: hash_file(f) for f in files}
+    existing = load_existing_summary(summary_path)
+    old_hashes = existing.frontmatter.source_hashes if existing else {}
+    old_sections = parse_existing_sections(existing) if existing else {}
+
+    if existing is not None and current_hashes == old_hashes:
+        result.unchanged_dirs.append(directory)
+        if verbose:
+            print(f"Unchanged: {directory}")
+        return
+
+    sections: list[str] = []
+    tags: list[str] = [] if existing is None else list(existing.frontmatter.tags)
+    extracted_any = False
+    ingested_files: list[Path] = []
+
     for file_path in files:
+        reusable = current_hashes[file_path.name] == old_hashes.get(file_path.name)
+        if reusable and file_path.name in old_sections:
+            sections.append(old_sections[file_path.name])
+            ingested_files.append(file_path)
+            continue
+
         if verbose:
             print(f"Processing: {file_path}")
         try:
-            documents.append((file_path, extract_document(file_path, root, client)))
-        except DocumentIngestError as error:
+            document = extract_document(file_path, root, client)
+        except (DocumentIngestError, LLMClientError) as error:
             result.skipped.append((file_path, str(error)))
+            current_hashes.pop(file_path.name, None)
             if verbose:
                 print(f"  Skipped {file_path}: {error}")
-        except LLMClientError as error:
-            result.skipped.append((file_path, str(error)))
-            if verbose:
-                print(f"  LLM failed for {file_path}: {error}")
+            continue
 
-    if not documents:
+        sections.append(render_section(file_path, document))
+        ingested_files.append(file_path)
+        extracted_any = True
+        current_hashes[file_path.name] = hash_file(file_path)  # OCR may have rewritten the PDF
+        for tag in document.frontmatter.tags:
+            if tag not in tags:
+                tags.append(tag)
+
+    if not ingested_files:
+        return
+    if not extracted_any and existing is not None and current_hashes == old_hashes:
+        result.unchanged_dirs.append(directory)
         return
 
-    summary = build_folder_summary(directory, root, documents)
+    relative_dir = directory.relative_to(root)
+    frontmatter = OKFFrontmatter(
+        type=FOLDER_SUMMARY_OKF_TYPE,
+        title=directory.name.replace("_", " ").title(),
+        description=f"Aggregated extraction of {len(ingested_files)} document(s) in {relative_dir or '.'}",
+        tags=tags,
+        source=None,
+        sources=[str(f.relative_to(root)) for f in ingested_files],
+        source_hashes=current_hashes,
+    )
+    summary = OKFDocument(frontmatter=frontmatter, body="\n\n".join(sections))
     summary_path.write_text(summary.to_markdown(), encoding="utf-8")
     result.written_paths.append(summary_path)
     if verbose:
