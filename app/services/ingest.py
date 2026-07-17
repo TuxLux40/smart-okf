@@ -95,9 +95,16 @@ def extract_document(file_path: Path, root: Path, client: LLMClient) -> OKFDocum
 
 
 def render_section(file_path: Path, document: OKFDocument) -> str:
-    """Render one source document's body section for the folder aggregate."""
+    """Render one source document's body section for the folder aggregate.
+
+    Headings inside the document body are demoted one level (capped at h6) so the
+    aggregate's `## <document>` sections stay the only h2s — `parse_existing_sections`
+    splits on h2, and un-demoted inner h2s would fragment a section and silently
+    truncate it on incremental re-ingest.
+    """
     heading = document.frontmatter.title or file_path.name
-    return f"## {heading}\n\n_Source: {file_path.name}_\n\n{document.body}"
+    body = re.sub(r"^(#{1,5}) ", r"#\1 ", document.body, flags=re.MULTILINE)
+    return f"## {heading}\n\n_Source: {file_path.name}_\n\n{body}"
 
 
 def parse_existing_sections(summary: OKFDocument) -> dict[str, str]:

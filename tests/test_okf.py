@@ -57,3 +57,12 @@ def test_apply_ingest_defaults_fills_missing_provenance_without_mutation() -> No
     assert original.frontmatter.source is None
     assert updated.frontmatter.source == "birth_record.pdf"
     assert updated.frontmatter.title == "Birth Record"
+
+
+def test_from_markdown_with_malformed_yaml_degrades_to_unknown_type() -> None:
+    malformed = "---\ntype: Fact\ntitle: Broken: [unclosed\n---\n\nBody text"
+
+    document = OKFDocument.from_markdown(malformed)
+
+    assert document.frontmatter.type == UNKNOWN_OKF_TYPE
+    assert "Body text" in document.body

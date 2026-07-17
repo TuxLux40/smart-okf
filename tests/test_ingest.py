@@ -97,3 +97,28 @@ def test_ingest_skips_folder_named_after_reserved_filename(tmp_path: Path) -> No
 
     assert result.written_paths == []
     assert any("reserved" in reason for _, reason in result.skipped)
+
+
+def test_inner_headings_are_demoted_so_sections_survive_reingest(tmp_path: Path) -> None:
+    class _HeadingClient:
+        calls = 0
+
+        def extract_structured(self, raw_text: str, context: str = "") -> str:
+            self.calls += 1
+            return "---\ntype: Fact\n---\n\n## Inner Heading\n\nDetail line\n\n###### Deep\n\nMore"
+
+    (tmp_path / "doc.txt").write_text("content", encoding="utf-8")
+    client = _HeadingClient()
+    ingest_folder(str(tmp_path), client=client)  # type: ignore[arg-type]
+
+    aggregate_path = tmp_path / f"{tmp_path.name}.md"
+    text = aggregate_path.read_text(encoding="utf-8")
+    assert "### Inner Heading" in text
+    assert "###### Deep" in text  # h6 stays h6, not pushed past the markdown limit
+
+    (tmp_path / "other.txt").write_text("second file", encoding="utf-8")
+    ingest_folder(str(tmp_path), client=client)  # type: ignore[arg-type]
+
+    text = aggregate_path.read_text(encoding="utf-8")
+    assert "Detail line" in text  # reused section kept its full body
+    assert "More" in text

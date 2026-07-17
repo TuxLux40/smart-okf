@@ -71,14 +71,25 @@ class OKFDocument(BaseModel):
 
     @classmethod
     def from_markdown(cls, content: str) -> "OKFDocument":
-        """Parse OKF markdown into a document model."""
+        """Parse OKF markdown into a document model.
+
+        Permissive per OKF spec §9: malformed frontmatter (e.g. LLM-emitted YAML with
+        unquoted colons) degrades to an Unknown-type document carrying the full content
+        as body, rather than failing the document entirely.
+        """
         if content.startswith("---"):
             parts = content.split("---", 2)
             if len(parts) >= 3:
                 frontmatter_raw = parts[1].strip()
                 body = parts[2].strip()
-                frontmatter_data = yaml.safe_load(frontmatter_raw) or {}
-                frontmatter = OKFFrontmatter(**frontmatter_data)
+                try:
+                    frontmatter_data = yaml.safe_load(frontmatter_raw) or {}
+                    frontmatter = OKFFrontmatter(**frontmatter_data)
+                except Exception:
+                    return cls(
+                        frontmatter=OKFFrontmatter.model_validate({"type": UNKNOWN_OKF_TYPE}),
+                        body=content,
+                    )
                 return cls(frontmatter=frontmatter, body=body)
         return cls(
             frontmatter=OKFFrontmatter.model_validate({"type": UNKNOWN_OKF_TYPE}),
