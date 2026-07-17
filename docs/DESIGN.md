@@ -18,6 +18,31 @@
 | 0.2 | 2026-07-16 | Addressed 20 review issues: dependencies, reasoning contract, enrichment scoring, job concurrency, colocation clarity, PR reorder, config schema, MCP direct-service coupling, API validation, derive async defaults, MVP milestones |
 | 0.3 | 2026-07-16 | Re-review round 1: fixed ingest sequence diagram, reasoning path validation, subdir resolver, op→patch mapping, composition root wiring, URL-aware llm_host validator |
 | 0.4 | 2026-07-16 | Re-review round 2: fixed sequence diagram write steps, enrichment link+companion policy (Option A), multi-root KBManager map, Phase 1 cut line → PR 11 |
+| 0.5 | 2026-07-17 | **Scope trimmed** — see amendment below. Sections after this point describe the original full design and are kept as reference/aspirational-future only; they no longer reflect current implementation direction. |
+
+### 2026-07-17 Scope Amendment
+
+Actual goal restated: agents get easy query access to personal documents (health, insurance,
+government, providers, etc.), not a general-purpose data-catalog platform. Concrete deltas from
+everything below:
+
+- **Co-location: one aggregate `.md` per folder, not per file, non-recursive.** Each folder's
+  aggregate (`<folder>/<folder-name>.md`) covers only files directly inside it — a subfolder gets
+  its own separate aggregate, its content is never rolled up into the parent's. Replaces the
+  `companion`/`subdir`/`mixed` resolver design in §"Co-location Strategy" entirely — implemented in
+  `app/services/ingest.py` (`build_folder_summary`, `folder_summary_path`).
+- **Cron over folder watcher.** No `watchdog`-based long-running process (PR 10, §"Folder
+  Watcher") — a scheduled `ingest` run (cron/systemd timer) is simpler and documents don't need
+  processing the instant they're saved.
+- **LLM backend: any OpenAI-compatible server**, not Ollama-specific — `app/services/llm_client.py`
+  speaks `/v1/chat/completions` directly (works against Ollama, llama.cpp's `llama-server`, LM
+  Studio, vLLM).
+- **Enrichment gate, dream/derive reasoning, FastAPI, MCP tools (PR 6–18 below) are optional/later,**
+  not committed scope. Build them only if the simple ingest → aggregate → search loop turns out to
+  be insufficient.
+- SQLite (§"Job System", §"Review queue") was never meant to be the knowledge store — MD files stay
+  source of truth; SQLite is auxiliary (job dedup, review-queue persistence). Not needed until/if
+  the optional pieces above are built.
 
 ---
 

@@ -13,6 +13,9 @@ UNKNOWN_OKF_TYPE = "Unknown"
 RELATED_SECTION_HEADING = "## Related"
 DEFAULT_LINK_LABEL = "Related"
 
+FOLDER_SUMMARY_OKF_TYPE = "FolderSummary"
+"""Frontmatter `type` for the one aggregate concept written per folder (non-recursive)."""
+
 INDEX_FILENAME = "index.md"
 LOG_FILENAME = "log.md"
 RESERVED_CONCEPT_FILENAMES = frozenset({INDEX_FILENAME, LOG_FILENAME})

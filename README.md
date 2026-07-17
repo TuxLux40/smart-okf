@@ -1,6 +1,6 @@
 # smart-okf
 
-**Local-first OKF knowledge base** for sensitive documents — co-located Markdown companions, your own LLM for extraction, and Honcho-inspired reasoning (store → derive → dream → query). Everything stays on your machine.
+**Local-first OKF knowledge base** for sensitive documents — one aggregate Markdown file per folder, your own LLM for extraction, and an optional Honcho-inspired reasoning loop (store → derive → dream → query). Everything stays on your machine.
 
 Turn folder hierarchies of PDFs, scans, and text files into structured, browsable, agent-parseable knowledge without sending data to the cloud.
 
@@ -17,34 +17,33 @@ Neither gives you **all three** of: local LLM-extracted structured facts, files 
 
 | Capability | Status |
 |------------|--------|
-| Co-located OKF `.md` companions (`file.pdf` → `file.md`) | ✅ |
+| One aggregate OKF `.md` per folder (`providers/` → `providers/providers.md`), non-recursive | ✅ |
 | PDF, `.txt`, `.docx`, `.eml`, `.csv`, `.xlsx` ingest via any OpenAI-compatible LLM | ✅ |
 | Pydantic OKF models with YAML frontmatter | ✅ |
 | CLI folder ingest | ✅ |
 | Streamlit UI skeleton | ⚠️ Placeholder |
 | Image OCR (`.png`, `.jpg`) | ❌ Not yet — fails fast until OCR lands |
-| Folder watcher, `index.md`, enrichment gate | ❌ Planned, optional |
-| Derive / Dream reasoning loop | ❌ Prompts exist, not wired, optional |
-| FastAPI REST + MCP tools | ❌ Planned, optional |
+| Scheduled ingest (cron/systemd timer) | ⚠️ Manual CLI today; add your own schedule |
+| `index.md`, enrichment gate, derive/dream reasoning, FastAPI, MCP | ❌ Optional/later — only if the simple loop below isn't enough |
 
-See [`docs/DESIGN.md`](docs/DESIGN.md) for the full system design and phased PR plan.
+See [`docs/DESIGN.md`](docs/DESIGN.md) (2026-07-17 scope amendment at the top) for the full system design, what's cut, and why.
 
 ## How It Works
 
 ```
 Document folders (local storage)
-        ↓ watcher / manual ingest
-app/services/ingest.py  →  text_extraction  →  llm_client  →  OKF .md
-        ↓ (planned)
-KB manager, enrichment, derive/dream, search, API, MCP
+        ↓ manual or cron-scheduled ingest
+app/services/ingest.py  →  text_extraction  →  llm_client  →  one OKF .md per folder
+        ↓ (optional/later)
+enrichment, derive/dream, search, API, MCP
         ↓
-Humans browse folders · agents via ripgrep / API / MCPJungle
+Humans browse folders · agents via ripgrep / API (planned) / MCPJungle (planned)
 ```
 
-1. Point smart-okf at a document folder.
+1. Point smart-okf at a document folder (or run it on a schedule — cron, systemd timer).
 2. Supported files are read (PDF via pdfplumber; `.docx`, `.eml`, `.csv`, `.xlsx`, `.txt` natively).
-3. Your LLM extracts structured facts into [OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) markdown — any server speaking the OpenAI chat completions API: Ollama, llama.cpp's `llama-server`, vLLM, LM Studio, or a hosted OpenAI-compatible endpoint.
-4. Companion `.md` files are written next to the originals with provenance in frontmatter (`source` field).
+3. Your LLM extracts structured facts per file into [OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) markdown — any server speaking the OpenAI chat completions API: Ollama, llama.cpp's `llama-server`, vLLM, LM Studio, or a hosted OpenAI-compatible endpoint.
+4. Every folder's extractions are merged into one aggregate `.md` **in that folder**, covering only the files directly inside it (a subfolder gets its own separate aggregate), with per-file provenance in frontmatter (`sources` field).
 5. Humans browse folders directly; agents query via ripgrep, API, or MCP (planned).
 
 ## Prerequisites
@@ -75,14 +74,17 @@ uv sync --group dev
 uv run python scripts/ingest_folder.py /path/to/your/documents
 ```
 
-For each supported file, a co-located OKF markdown companion appears alongside the original:
+Each folder gets one aggregate OKF markdown file, named after the folder, covering every
+supported file directly inside it (subfolders get their own, separate aggregate):
 
 ```
 documents/
+├── documents.md      ← generated: aggregate of contract.pdf + notes.txt
 ├── contract.pdf
-├── contract.md      ← generated
 ├── notes.txt
-└── notes.md         ← generated
+└── genealogy/
+    ├── genealogy.md   ← generated: separate aggregate, just this folder's files
+    └── birth.pdf
 ```
 
 ### 2. Streamlit UI (skeleton)
@@ -111,19 +113,31 @@ Constants live in [`app/constants.py`](app/constants.py). Supported document suf
 
 ## OKF Output Format
 
-Each companion file is OKF markdown — YAML frontmatter plus a structured body:
+Each folder's aggregate file is OKF markdown — YAML frontmatter plus one body section per source
+document:
 
 ```yaml
 ---
-type: DocumentSummary
-title: Contract Review
-description: Summary of key terms and dates
+type: FolderSummary
+title: Contracts
+description: Aggregated extraction of 2 document(s) in contracts/2024
 tags: [legal, contract]
-source: contracts/2024/contract.pdf
+sources:
+  - contracts/2024/lease.pdf
+  - contracts/2024/isp.pdf
 ---
 
-## Key Facts
-...
+## Lease
+
+_Source: lease.pdf_
+
+...key terms and dates...
+
+## Isp
+
+_Source: isp.pdf_
+
+...contract details...
 ```
 
 Models and serialization: [`app/models/okf.py`](app/models/okf.py).
@@ -150,7 +164,7 @@ app/
 ├── exceptions.py         # LLMClientError, DocumentIngestError
 ├── models/okf.py         # OKFFrontmatter, OKFDocument
 ├── services/
-│   ├── ingest.py         # Folder + file ingest
+│   ├── ingest.py         # Per-folder aggregate ingest (non-recursive)
 │   ├── llm_client.py     # OpenAI-compatible chat + extraction
 │   ├── text_extraction.py
 │   └── prompts.py
@@ -165,15 +179,14 @@ Agent-oriented docs: [`AGENTS.md`](AGENTS.md), [`AGENT_GUIDES.md`](AGENT_GUIDES.
 
 ## Roadmap
 
-| Phase | Focus |
-|-------|-------|
-| **0** (current) | Scaffolding — models, ingest, LLM client, CLI |
-| **1** | Watcher, OCR for images, KB manager, `index.md`, derive loop |
-| **2** | Full Streamlit UI, review queue, FastAPI |
-| **3** | MCP tools (MCPJungle), OpenWebUI integration |
-| **4** | Graph viz, git auto-commit, advanced search |
+Committed scope is intentionally small: models, per-folder aggregate ingest, LLM client, CLI, a
+cron-friendly ingest command. Everything past that — OCR for images, `index.md` generation,
+enrichment gate, derive/dream reasoning, FastAPI, MCP tools — is optional/later, built only if the
+simple ingest → aggregate → ripgrep-search loop turns out not to be enough.
 
-Details: [`docs/DESIGN.md`](docs/DESIGN.md) · legacy notes: [`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md)
+Full historical design (including the since-cut watcher/per-file-companion/Ollama-only design) and
+the amendment explaining what changed: [`docs/DESIGN.md`](docs/DESIGN.md) · legacy notes:
+[`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md)
 
 ## Core Principles
 
@@ -181,7 +194,7 @@ Details: [`docs/DESIGN.md`](docs/DESIGN.md) · legacy notes: [`DEVELOPMENT_PLAN.
 - **Human + agent usable** — browse folders natively; agents follow links, indices, and frontmatter.
 - **OKF native** — portable, git-friendly, structured markdown with provenance.
 - **Your LLM backend** — any OpenAI-compatible chat completions server: Ollama, llama.cpp, vLLM, LM Studio.
-- **Honcho-inspired loop** — ingest events → background reasoning → persistent insights in co-located MDs.
+- **Honcho-inspired loop (optional/later)** — ingest events → background reasoning → persistent insights in the folder aggregates.
 
 ## Related
 

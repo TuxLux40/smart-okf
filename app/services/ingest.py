@@ -1,11 +1,17 @@
-"""Document ingest helpers shared by CLI and UI."""
+"""Document ingest helpers shared by CLI and UI.
+
+Writes one aggregate OKF markdown file per folder (non-recursive: a folder's aggregate
+covers only the files directly inside it, not files in subfolders) rather than one
+companion per source document, to keep folders with many documents from becoming
+cluttered with individual `.md` files.
+"""
 
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from app.constants import RESERVED_CONCEPT_FILENAMES
+from app.constants import FOLDER_SUMMARY_OKF_TYPE, RESERVED_CONCEPT_FILENAMES
 from app.exceptions import DocumentIngestError, LLMClientError
-from app.models.okf import OKFDocument
+from app.models.okf import OKFDocument, OKFFrontmatter
 from app.services.llm_client import LLMClient
 from app.services.text_extraction import extract_text_from_file, is_supported_document
 from app.types import FrontmatterPatch
@@ -48,17 +54,13 @@ def apply_ingest_defaults(
     return document.model_copy(update={"frontmatter": updated_frontmatter})
 
 
-def co_located_markdown_path(file_path: Path) -> Path:
-    """Return the companion markdown path for an original document."""
-    return file_path.with_suffix(".md")
+def folder_summary_path(directory: Path) -> Path:
+    """Return the aggregate markdown path for a folder: `<folder>/<folder-name>.md`."""
+    return directory / f"{directory.name}.md"
 
 
-def ingest_document_file(
-    file_path: Path,
-    root: Path,
-    client: LLMClient,
-) -> Path:
-    """Extract, structure, and write one co-located OKF markdown file."""
+def extract_document(file_path: Path, root: Path, client: LLMClient) -> OKFDocument:
+    """Extract and structure one document into an OKF document (no write)."""
     raw_text = extract_text_from_file(file_path)
     if not raw_text.strip():
         raise DocumentIngestError(f"No extractable text in {file_path}")
@@ -67,24 +69,43 @@ def ingest_document_file(
         raw_text,
         context=str(file_path.relative_to(root)),
     )
-
-    markdown_path = co_located_markdown_path(file_path)
-    if markdown_path.name in RESERVED_CONCEPT_FILENAMES:
-        raise DocumentIngestError(
-            f"{file_path} would produce a reserved companion filename ({markdown_path.name}); rename the source file"
-        )
-
     try:
         document = OKFDocument.from_markdown(extracted_markdown)
-        document = apply_ingest_defaults(document, file_path, root)
-        markdown_path.parent.mkdir(exist_ok=True)
-        markdown_path.write_text(document.to_markdown(), encoding="utf-8")
-    except DocumentIngestError:
-        raise
     except Exception as error:
-        raise DocumentIngestError(f"Failed to write OKF markdown for {file_path}") from error
+        raise DocumentIngestError(f"Failed to parse OKF markdown for {file_path}") from error
+    return apply_ingest_defaults(document, file_path, root)
 
-    return markdown_path
+
+def build_folder_summary(
+    directory: Path,
+    root: Path,
+    documents: list[tuple[Path, OKFDocument]],
+) -> OKFDocument:
+    """Merge per-file extractions into one folder-level aggregate OKF document."""
+    tags: list[str] = []
+    for _, document in documents:
+        for tag in document.frontmatter.tags:
+            if tag not in tags:
+                tags.append(tag)
+
+    sources = [str(file_path.relative_to(root)) for file_path, _ in documents]
+    relative_dir = directory.relative_to(root)
+    frontmatter = OKFFrontmatter(
+        type=FOLDER_SUMMARY_OKF_TYPE,
+        title=directory.name.replace("_", " ").title(),
+        description=f"Aggregated extraction of {len(documents)} document(s) in {relative_dir or '.'}",
+        tags=tags,
+        source=None,
+        sources=sources,
+    )
+
+    sections = []
+    for file_path, document in documents:
+        heading = document.frontmatter.title or file_path.name
+        sections.append(f"## {heading}\n\n_Source: {file_path.name}_\n\n{document.body}")
+    body = "\n\n".join(sections)
+
+    return OKFDocument(frontmatter=frontmatter, body=body)
 
 
 def ingest_folder(
@@ -93,7 +114,7 @@ def ingest_folder(
     *,
     verbose: bool = False,
 ) -> IngestFolderResult:
-    """Ingest supported documents from a folder."""
+    """Ingest supported documents from a folder, writing one aggregate `.md` per subfolder."""
     root = Path(folder).expanduser().resolve()
     result = IngestFolderResult(root=root)
     if not root.is_dir():
@@ -105,31 +126,56 @@ def ingest_folder(
     if verbose:
         print(f"Scanning {root}...")
 
-    for file_path in root.rglob("*"):
-        if not file_path.is_file() or not is_supported_document(file_path):
-            continue
+    directories = [root] + sorted(p for p in root.rglob("*") if p.is_dir())
+    for directory in directories:
+        _ingest_directory(directory, root, llm_client, result, verbose=verbose)
 
+    if verbose:
+        print(f"Ingest complete. Wrote {len(result.written_paths)} folder summary file(s).")
+
+    return result
+
+
+def _ingest_directory(
+    directory: Path,
+    root: Path,
+    client: LLMClient,
+    result: IngestFolderResult,
+    *,
+    verbose: bool,
+) -> None:
+    """Ingest the files directly inside one directory (non-recursive) into its aggregate."""
+    files = sorted(f for f in directory.iterdir() if f.is_file() and is_supported_document(f))
+    if not files:
+        return
+
+    summary_path = folder_summary_path(directory)
+    if summary_path.name in RESERVED_CONCEPT_FILENAMES:
+        result.skipped.append(
+            (directory, f"folder name {directory.name!r} would produce a reserved summary filename; rename the folder")
+        )
+        return
+
+    documents: list[tuple[Path, OKFDocument]] = []
+    for file_path in files:
         if verbose:
             print(f"Processing: {file_path}")
-
         try:
-            markdown_path = ingest_document_file(file_path, root, llm_client)
+            documents.append((file_path, extract_document(file_path, root, client)))
         except DocumentIngestError as error:
             result.skipped.append((file_path, str(error)))
             if verbose:
                 print(f"  Skipped {file_path}: {error}")
-            continue
         except LLMClientError as error:
             result.skipped.append((file_path, str(error)))
             if verbose:
                 print(f"  LLM failed for {file_path}: {error}")
-            continue
 
-        result.written_paths.append(markdown_path)
-        if verbose:
-            print(f"  -> Wrote {markdown_path}")
+    if not documents:
+        return
 
+    summary = build_folder_summary(directory, root, documents)
+    summary_path.write_text(summary.to_markdown(), encoding="utf-8")
+    result.written_paths.append(summary_path)
     if verbose:
-        print(f"Ingest complete. Wrote {len(result.written_paths)} markdown file(s).")
-
-    return result
+        print(f"  -> Wrote {summary_path}")

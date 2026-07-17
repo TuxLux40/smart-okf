@@ -18,26 +18,37 @@ the code, when a rule changes.
 
 ## Bundle structure
 
-smart-okf uses **co-located companions** (`file.pdf` → `file.md`) — the bundle lives inside the
-document folders themselves rather than a separate `knowledge/` tree:
+smart-okf writes **one aggregate concept per folder, non-recursive** — the bundle lives inside the
+document folders themselves rather than a separate `knowledge/` tree. A folder's aggregate
+(`<folder>/<folder-name>.md`) covers only the files directly inside that folder; a subfolder gets
+its own separate aggregate, never rolled up into the parent's. Chosen over one companion per
+source file (`file.pdf` → `file.md`) because folders with many documents (a `providers/` with 150
+PDFs) would otherwise become as cluttered as the originals:
 
 ```
 documents/
 ├── index.md              # planned (PR 2): directory listing, no frontmatter (see below)
 ├── contract.pdf
-├── contract.md           # concept: companion to contract.pdf
 ├── genealogy/
-│   ├── index.md
+│   ├── genealogy.md      # concept: aggregate of every supported file directly in genealogy/
 │   ├── birth.pdf
-│   └── birth.md
+│   ├── death.pdf
+│   └── 1900s/
+│       ├── 1900s.md      # separate aggregate — does NOT include genealogy/'s files or vice versa
+│       └── census.pdf
 ```
+
+Implemented in `app/services/ingest.py`: `extract_document()` runs one LLM extraction per source
+file (individual quality preserved), `build_folder_summary()` merges the results into one
+`OKFDocument` per folder, `folder_summary_path()` names it after the folder.
 
 ## Reserved filenames
 
 `index.md` and `log.md` are reserved at every level of the hierarchy and MUST NOT be used as
-concept names. Enforced in code by `app/constants.RESERVED_CONCEPT_FILENAMES` —
-`ingest_document_file` raises `DocumentIngestError` rather than silently overwrite one (e.g. a
-source file literally named `index.pdf` would otherwise produce a companion named `index.md`).
+concept names — and since aggregates are named after their folder, a folder literally named
+`index` or `log` would produce a reserved aggregate filename. Enforced in code by
+`app/constants.RESERVED_CONCEPT_FILENAMES`: `_ingest_directory` skips such a folder (recorded in
+`IngestFolderResult.skipped`) rather than silently overwrite the reserved file.
 
 ## Concept documents
 
@@ -50,13 +61,19 @@ tolerate unknown values.
 **Recommended:** `title`, `description` (used by index/search — always set it), `resource` (URI
 for an underlying asset, if any), `tags`, `timestamp`.
 
-**smart-okf extension field (not in upstream OKF v0.1):** `source` — relative path to the
-original ingested file. Required for anything produced by `app/services/ingest.py`; this is our
-provenance mechanism since we ingest local documents rather than cataloging existing resources.
+**smart-okf extension fields (not in upstream OKF v0.1):** `source` — relative path to the original
+ingested file, for a concept describing exactly one document. `sources` — list of relative paths,
+for a folder-level aggregate describing several documents (what `app/services/ingest.py` produces
+by default). This is our provenance mechanism since we ingest local documents rather than
+cataloging existing resources.
 
 **`okf_version`:** per §11 of the spec, this belongs only in a bundle-root `index.md`'s
 frontmatter (the one exception where `index.md` carries frontmatter) — not on every concept.
 `OKFFrontmatter.okf_version` defaults to `None` and is only set when a document explicitly opts in.
+
+Example of a single-document concept (this is also the shape of what `extract_document()` produces
+per source file before `build_folder_summary()` merges several of them into one `FolderSummary`
+aggregate — see the Types table below):
 
 ```markdown
 ---
@@ -134,18 +151,23 @@ types gracefully:
 | `Fact` | An atomic, sourced statement |
 | `Event` | Something that happened, with a date |
 | `Person` | An entity/person profile |
-| `DocumentSummary` | Extraction summary for one ingested document |
+| `FolderSummary` | Aggregate of every ingested document in one folder — what ingest produces by default |
+| `DocumentSummary` | Extraction summary for exactly one document (manual authoring; ingest no longer produces these directly) |
 | `Index` | A directory listing (`index.md`) |
-| `Insight` | Derived/inductive conclusion (Dream pass) |
-| `Pattern` | Cross-document pattern or abstraction (Dream pass) |
+| `Insight` | Derived/inductive conclusion (Dream pass, optional/later) |
+| `Pattern` | Cross-document pattern or abstraction (Dream pass, optional/later) |
 
 Add project-specific types as needed; do not enforce an enum.
 
 ## Workflow (Honcho-inspired: store → derive → dream → query)
 
-1. **Store** — ingest writes the co-located concept `.md` with provenance (`app/services/ingest.py`).
-2. **Derive** — on ingest, extract explicit facts + immediate deductions (planned: PR 8).
+1. **Store** — a scheduled ingest run (cron/systemd timer, not a watcher) writes each folder's
+   aggregate `.md` with provenance (`app/services/ingest.py`).
+2. **Derive** — on ingest, extract explicit facts + immediate deductions (optional/later).
 3. **Dream** — periodic pass over the KB for patterns, conflicts, links, abstractions; a natural
-   writer of `log.md` entries (planned: PR 9).
-4. **Query** — humans browse folders directly; agents use ripgrep, index/companion links, or the
-   future API/MCP tools (planned: PR 5, PR 12, PR 15).
+   writer of `log.md` entries (optional/later).
+4. **Query** — humans browse folders directly; agents use ripgrep or folder-aggregate links; API/MCP
+   are optional/later, not committed scope.
+
+See `docs/DESIGN.md`'s 2026-07-17 scope amendment for the full rationale behind cutting the
+watcher, per-file companions, and Ollama lock-in from the original design.
