@@ -29,6 +29,12 @@ EXTRACTION_PROMPT_FILE = "extraction_system.md"
 DEFAULT_EXTRACTION_PROMPT = "You are an expert at extracting durable facts into OKF format."
 DEFAULT_EXTRACTION_USER_SUFFIX = "\n\nOutput only valid OKF markdown with frontmatter and structured body."
 
+FOLDER_SUMMARY_PROMPT_FILE = "folder_summary.md"
+DEFAULT_FOLDER_SUMMARY_PROMPT = (
+    "Write a 2-5 sentence orientation summary of the documents below, in their language. "
+    "Only add a mermaid timeline if there are 3+ clearly sequential dated events."
+)
+
 OCR_LANGUAGES = "deu+eng"
 """Tesseract language packs used by OCRmyPDF for scanned PDFs."""
 

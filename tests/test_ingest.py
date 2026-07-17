@@ -13,6 +13,9 @@ class _StubLLMClient:
         self.calls += 1
         return f"---\ntype: Fact\ndescription: extracted\n---\n\nExtracted: {raw_text.strip()}"
 
+    def summarize_sections(self, merged_sections: str) -> str:
+        return ""
+
 
 def test_folder_summary_path_is_folder_name_plus_md(tmp_path: Path) -> None:
     directory = tmp_path / "providers"
@@ -107,6 +110,9 @@ def test_inner_headings_are_demoted_so_sections_survive_reingest(tmp_path: Path)
             self.calls += 1
             return "---\ntype: Fact\n---\n\n## Inner Heading\n\nDetail line\n\n###### Deep\n\nMore"
 
+        def summarize_sections(self, merged_sections: str) -> str:
+            return ""
+
     (tmp_path / "doc.txt").write_text("content", encoding="utf-8")
     client = _HeadingClient()
     ingest_folder(str(tmp_path), client=client)  # type: ignore[arg-type]
@@ -145,3 +151,40 @@ def test_ingest_walk_skips_hidden_directories(tmp_path: Path) -> None:
 
     assert client.calls == 0
     assert result.written_paths == []
+
+
+def test_aggregate_prepends_synthesized_orientation_summary(tmp_path: Path) -> None:
+    class _SummarizingClient:
+        def extract_structured(self, raw_text: str, context: str = "") -> str:
+            return f"---\ntype: Fact\n---\n\nExtracted: {raw_text.strip()}"
+
+        def summarize_sections(self, merged_sections: str) -> str:
+            return "Orientation: two documents about the same matter."
+
+    (tmp_path / "a.txt").write_text("first", encoding="utf-8")
+    (tmp_path / "b.txt").write_text("second", encoding="utf-8")
+
+    ingest_folder(str(tmp_path), client=_SummarizingClient())  # type: ignore[arg-type]
+
+    aggregate = (tmp_path / f"{tmp_path.name}.md").read_text(encoding="utf-8")
+    assert "Orientation: two documents about the same matter." in aggregate
+    summary_index = aggregate.index("Orientation:")
+    first_section_index = aggregate.index("## ")
+    assert summary_index < first_section_index
+
+
+def test_aggregate_still_written_when_summary_synthesis_fails(tmp_path: Path) -> None:
+    from app.exceptions import LLMClientError
+
+    class _FailingSummaryClient:
+        def extract_structured(self, raw_text: str, context: str = "") -> str:
+            return f"---\ntype: Fact\n---\n\nExtracted: {raw_text.strip()}"
+
+        def summarize_sections(self, merged_sections: str) -> str:
+            raise LLMClientError("boom")
+
+    (tmp_path / "a.txt").write_text("first", encoding="utf-8")
+    result = ingest_folder(str(tmp_path), client=_FailingSummaryClient())  # type: ignore[arg-type]
+
+    assert result.written_paths == [tmp_path / f"{tmp_path.name}.md"]
+    assert any("orientation summary skipped" in reason for _, reason in result.skipped)

@@ -2,7 +2,6 @@
 name: smart-okf
 description: Ingest and query a local-first OKF knowledge base of personal documents (health, insurance, government, providers/ISP, finances, contracts). Turns folders of PDFs, docx, eml, csv, xlsx, and txt files into one aggregate OKF markdown file per folder using a local OpenAI-compatible LLM, then answers questions from those aggregates. Use this skill whenever the user asks to ingest/OCR/index their documents, update or rebuild their document knowledge base, or asks a question answerable from their personal documents — "what does my ISP contract say", "when was my last doctor visit", "find my insurance policy number" — even if they don't mention OKF or smart-okf by name.
 ---
-
 # smart-okf — personal document knowledge base
 
 Local-first OKF (Open Knowledge Format) knowledge base. Each document folder gets **one
@@ -16,11 +15,11 @@ Two operations: **ingest** (build/refresh aggregates) and **query** (answer from
 
 Answer questions from existing aggregates — no LLM server needed, they're plain markdown.
 
-**Always search the entire documents root, never just the topically-named folder.** Real-life
-processes cut across the folder taxonomy: a Grundsicherung (government assistance) form needs
-data from `finances/` AND `insurances/` AND `providers/` AND `apartments/`; a legal dispute
-with an energy provider spans `providers/`, `finances/`, and `lawyers/`. Answering "help with
-finances" from `finances/` alone silently misses reference numbers, dates, and amounts that
+**Always search the entire documents root, never just the topically-named folder.** Example: Real-life
+processes cut across the folder taxonomy: a government benefits application needs data from
+`finances/` AND `insurances/` AND `providers/` AND `apartments/`; a dispute with a utility
+provider spans `providers/`, `finances/`, and `lawyers/`. Answering "help with finances" from
+`finances/` alone silently misses reference numbers, dates, and amounts that
 live elsewhere — the single most common failure mode this KB exists to prevent.
 
 1. Find candidate aggregates with ripgrep **from the root**. Aggregates are named after their
@@ -30,16 +29,14 @@ live elsewhere — the single most common failure mode this KB exists to prevent
    rg -l --glob '*.md' 'type: FolderSummary' /path/to/documents      # list all aggregates
    rg -i -C3 'vodafone|kündigungsfrist' /path/to/documents --glob '*.md'   # content search, whole tree
    ```
-
 2. Read the matching aggregate(s). Each has YAML frontmatter (`sources:` lists the original
-   files) and one `## <Title>` body section per source document with `_Source: <filename>_`
-   provenance lines.
-
+   files), an orientation summary at the top for folders with 2+ documents (a few sentences,
+   sometimes a mermaid timeline of key dates), then one `## <Title>` body section per source
+   document with `_Source: <filename>_` provenance lines.
 3. When an aggregate's summary is too thin for the question (a specific amount, a full
    reference number, exact wording), read the **raw transcript** instead of re-extracting:
    `<root>/.okf-transcripts/<relative-path>.txt` holds the complete extracted text of every
    ingested file. Search it directly: `rg -i 'aktenzeichen' /path/to/documents/.okf-transcripts/`.
-
 4. Answer, citing the source document filename(s) from the provenance lines — not just the
    aggregate. If the aggregate looks stale or thin (the folder has more source files than
    `sources:` lists), say so and offer to re-ingest that folder.
@@ -127,11 +124,11 @@ real tree (originals + aggregates) untouched.
 
 Environment variables (or `smart-okf.yaml`, see [smart-okf.example.yaml](smart-okf.example.yaml)):
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `SMART_OKF_LLM_HOST` | `http://localhost:11434` | OpenAI-compatible `/v1/chat/completions` server |
-| `SMART_OKF_LLM_MODEL` | `qwen2.5:3b` | Model name as the server reports it |
-| `SMART_OKF_LLM_API_KEY` | `not-needed` | Only for servers that require auth |
+| Variable                  | Default                    | Purpose                                          |
+| ------------------------- | -------------------------- | ------------------------------------------------ |
+| `SMART_OKF_LLM_HOST`    | `http://localhost:11434` | OpenAI-compatible`/v1/chat/completions` server |
+| `SMART_OKF_LLM_MODEL`   | `qwen2.5:3b`             | Model name as the server reports it              |
+| `SMART_OKF_LLM_API_KEY` | `not-needed`             | Only for servers that require auth               |
 
 Remote (non-localhost/RFC1918) LLM hosts are refused unless `allow_remote_llm` is set — keeps
 sensitive documents off the cloud by default.

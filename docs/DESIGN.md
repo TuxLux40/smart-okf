@@ -44,6 +44,100 @@ everything below:
   source of truth; SQLite is auxiliary (job dedup, review-queue persistence). Not needed until/if
   the optional pieces above are built.
 
+### 2026-07-18 Roadmap: hardening + follow-ups
+
+Shipped since the amendment above (first live ingest run surfaced real gaps): image OCR via
+tesseract, in-place OCRmyPDF for scanned PDFs, a `.okf-transcripts/` raw-text sidecar store
+(lossless, so extraction never repeats), hash-incremental re-ingest, LLM request retries, tolerant
+frontmatter parsing, inner-heading demotion (fixes silent truncation on re-ingest), a synthesized
+orientation summary + optional mermaid timeline per aggregate, and git-based change tracking for
+the document root itself.
+
+Still open — numbered independently from the legacy PR 0–18 plan above (which this amendment
+already superseded) to avoid implying they continue that sequence:
+
+#### PR R1: Remote agent access
+
+**Problem:** Web-based agents (Claude, others) need read (and eventually write) access to the KB.
+Git is the natural fit — diffable, no daemon — but a public host (GitHub) is a real privacy
+concern for sensitive personal documents; an MCP server is more "native" for tool-calling agents
+but is new infrastructure to build and run.
+
+**Options (undecided — needs a decision, not just code):**
+1. Self-hosted git remote (Gitea/Forgejo, already in the homelab) + Tailscale for access control.
+   Zero new server code; agents clone/pull like any repo. Coarsest-grained access (whole repo).
+2. MCP server exposing `search`/`read`/`propose_write` tools over the existing services
+   (`app/services/ingest.py`, a new `app/services/search.py`). More work, finer-grained and
+   auditable access, no raw file/git exposure.
+3. Both — MCP as the primary interface, git remote as the human-facing/backup access path.
+
+**Files (option 2):** `app/mcp/server.py`, `app/mcp/tools.py`, `app/services/search.py` (ripgrep
+wrapper). Revives the `mcp` dependency removed in the 2026-07-17 rewrite.
+
+#### PR R2: Cross-folder consolidation pass
+
+**Problem:** A single real-world matter (a utility dispute, a benefits application) is scattered
+across multiple *folders'* aggregates, not just multiple documents in one folder — the same
+cross-folder blindness the "always search the whole root" rule in `SKILL.md` works around at
+query time, but nothing currently *writes* the connection down. A user should get a dedicated
+root-level concept file the moment ingest notices, say, an energy-provider dispute's aggregate
+sharing an account/case reference with a bank-statement aggregate and a debt-collection letter's
+aggregate in a different folder.
+
+**Design sketch:** After an ingest run produces one or more changed aggregates, a consolidation
+pass compares each changed aggregate's key identifiers (reference numbers, sender names, entities
+named in `tags`) against every *other* existing aggregate's frontmatter+summary (not full text —
+cheap enough to run on every changed aggregate). On a match, write or update a plain (non-hidden —
+this is a real user-facing concept, unlike `.okf-transcripts/`) root-level file, e.g.
+`<root>/<slug>.md`, `type: CrossReference`, linking the involved aggregates and stating the
+connection in prose. Reuses the existing `OKFDocument`/frontmatter machinery; no new model needed
+beyond a new `type` value in the vocabulary (`docs/OKF_SPEC.md`).
+
+**Files:** `app/services/consolidate.py` (new), a new prompt `prompts/cross_reference.md`, wired
+into `ingest_folder()` as an optional post-pass (`features.cross_folder_consolidation`, off by
+default until proven useful — an LLM comparison per pair of aggregates doesn't scale unbounded, so
+this needs a cheap pre-filter — e.g. shared tokens in `tags`/reference-number regexes — before any
+LLM call).
+
+#### PR R3: Extraction verbosity valve
+
+**Problem:** What counts as noise is subjective (company-officer boilerplate is irrelevant to the
+document owner but might matter to a different user of the published skill) — a single hardcoded
+extraction prompt can't fit everyone.
+
+**Design sketch:** A `smart-okf.yaml` `features.extraction_verbosity: concise | standard |
+verbose` (or similar) setting that swaps in a prompt variant / prompt suffix. Whether it's set via
+plain config or a first-run onboarding interview (Honcho-style) is a product decision, not an
+engineering one — needs discussion before implementation.
+
+**Files:** `app/models/config.py` (new field), `prompts/extraction_system.md` split into a base +
+verbosity-suffix, or 2-3 full prompt variants.
+
+#### PR R4: Semantic near-duplicate detection
+
+**Problem:** `source_hashes` only catches byte-identical files. Real near-duplicates — near
+identical government letter templates that differ only in which matter they pertain to — need
+content comparison, not hashing.
+
+**Design sketch:** On ingest, when a new document's extracted frontmatter (`type` + sender/entity
+tags) closely matches an existing document already in the same aggregate, run one extra LLM call
+asking "same matter or different?" with both raw texts, and record the verdict — either merging as
+one logical item or flagging both with a `related_documents` cross-reference. Needs a concrete
+scoring/pre-filter step (same as R2) so this doesn't become O(n²) LLM calls per folder.
+
+**Files:** extends `app/services/ingest.py` (`extract_document`/`_ingest_directory`), a new
+prompt `prompts/duplicate_check.md`.
+
+#### PR R5: Cron management commands
+
+**Problem:** `SKILL.md` only documents a crontab line to copy by hand; nothing installs, lists, or
+removes it.
+
+**Design sketch:** `scripts/ingest_folder.py` gains `--install-cron`/`--list-cron`/`--remove-cron`
+subcommands (or a separate `scripts/manage_cron.py`) wrapping `crontab -l`/`crontab -` diffing in
+a marked block, so re-running install is idempotent. Depends on the access-model decision (R1)
+only loosely — independent otherwise.
+
 ---
 
 ## Overview

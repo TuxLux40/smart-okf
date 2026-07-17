@@ -1,6 +1,12 @@
 """Prompt file loading helpers."""
 
-from app.constants import DEFAULT_EXTRACTION_PROMPT, EXTRACTION_PROMPT_FILE, PROMPTS_DIR
+from app.constants import (
+    DEFAULT_EXTRACTION_PROMPT,
+    DEFAULT_FOLDER_SUMMARY_PROMPT,
+    EXTRACTION_PROMPT_FILE,
+    FOLDER_SUMMARY_PROMPT_FILE,
+    PROMPTS_DIR,
+)
 
 
 def load_prompt(filename: str, fallback: str = "") -> str:
@@ -14,3 +20,8 @@ def load_prompt(filename: str, fallback: str = "") -> str:
 def load_extraction_prompt() -> str:
     """Load the system prompt used for OKF extraction."""
     return load_prompt(EXTRACTION_PROMPT_FILE, fallback=DEFAULT_EXTRACTION_PROMPT)
+
+
+def load_folder_summary_prompt() -> str:
+    """Load the system prompt used to synthesize a folder aggregate's top summary."""
+    return load_prompt(FOLDER_SUMMARY_PROMPT_FILE, fallback=DEFAULT_FOLDER_SUMMARY_PROMPT)

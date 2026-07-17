@@ -43,6 +43,15 @@ file (individual quality preserved), `_ingest_directory()` merges the results (r
 unchanged files via `source_hashes`) into one `OKFDocument` per folder, `folder_summary_path()`
 names it after the folder.
 
+Aggregates with 2+ sections carry a synthesized **orientation summary** as the first thing in the
+body, above the per-document `## <title>` sections: 2-5 sentences of what the folder is about,
+plus a mermaid `timeline` diagram if there are 3+ clearly sequential dated events across the
+documents (`app/services/llm_client.py:summarize_sections`, prompt in
+`prompts/folder_summary.md`). This exists so a long aggregate (dozens of documents) is scannable
+without reading every section — a real problem hit on the first live folder ingest. Synthesis
+failure degrades gracefully: the aggregate is still written without a summary, recorded in
+`IngestFolderResult.skipped`.
+
 ## Reserved filenames
 
 `index.md` and `log.md` are reserved at every level of the hierarchy and MUST NOT be used as

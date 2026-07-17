@@ -272,7 +272,16 @@ def _ingest_directory(
         sources=[str(f.relative_to(root)) for f in ingested_files],
         source_hashes=current_hashes,
     )
-    summary = OKFDocument(frontmatter=frontmatter, body="\n\n".join(sections))
+    joined_sections = "\n\n".join(sections)
+    body = joined_sections
+    try:
+        orientation = client.summarize_sections(joined_sections)
+    except LLMClientError as error:
+        orientation = ""
+        result.skipped.append((summary_path, f"orientation summary skipped: {error}"))
+    if orientation:
+        body = f"{orientation}\n\n{joined_sections}"
+    summary = OKFDocument(frontmatter=frontmatter, body=body)
     summary_path.write_text(summary.to_markdown(), encoding="utf-8")
     result.written_paths.append(summary_path)
     if verbose:

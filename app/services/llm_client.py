@@ -17,7 +17,7 @@ from app.constants import (
     DEFAULT_MAX_TOKENS,
 )
 from app.exceptions import LLMClientError
-from app.services.prompts import load_extraction_prompt
+from app.services.prompts import load_extraction_prompt, load_folder_summary_prompt
 
 _MAX_ATTEMPTS = 3
 _RETRY_BACKOFF_SECONDS = 2.0
@@ -89,3 +89,8 @@ class LLMClient:
         system_prompt = load_extraction_prompt()
         user_prompt = f"Context: {context}\n\nRaw content/OCR:\n{raw_text}{DEFAULT_EXTRACTION_USER_SUFFIX}"
         return self.chat(system_prompt, user_prompt)
+
+    def summarize_sections(self, merged_sections: str) -> str:
+        """Synthesize a short orientation summary (+ optional mermaid timeline) for a folder aggregate."""
+        system_prompt = load_folder_summary_prompt()
+        return self.chat(system_prompt, merged_sections)
