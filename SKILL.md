@@ -120,8 +120,17 @@ uv run python scripts/ingest_folder.py /path/to/documents
   frontmatter (`source_hashes`). Re-runs skip unchanged files entirely — no LLM calls, no
   rewrites — so scheduled re-ingests of a mostly-static tree are cheap. Only changed, new, or
   removed files trigger work in their folder.
-- One LLM call per changed source file, so a large first run takes time. Ingest one subfolder
-  at a time on first runs and check output quality before continuing.
+- Roughly one LLM call per changed source file, so a large first run takes time. Ingest one
+  subfolder at a time on first runs and check output quality before continuing. Documents too
+  large for a single call (over ~8000 characters of extracted text) are chunked automatically
+  and merged back into one aggregate section — this is transparent, no flag needed.
+- Every LLM call (chunked or not) is logged to `<root>/.okf-llm-log.jsonl` — model, duration,
+  retry count, success/failure. Useful for spotting a flaky backend or unusually slow document:
+  `rg '"success": false' /path/to/documents/.okf-llm-log.jsonl`.
+- Pass `--use-marker` for layout-aware PDF extraction (tables, forms) if the user has
+  [marker](https://github.com/datalab-to/marker)'s `marker_single` installed — see
+  Prerequisites in [README.md](README.md). Off by default; explicit-fails (not silent
+  fallback) if requested but not installed.
 - The run reports written aggregates, unchanged folders, and skipped files at the end; relay
   written + skipped to the user.
 - Cron/systemd-timer use the same command — no daemon, no watcher. Example crontab line:

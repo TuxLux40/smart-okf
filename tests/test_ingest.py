@@ -188,3 +188,32 @@ def test_aggregate_still_written_when_summary_synthesis_fails(tmp_path: Path) ->
 
     assert result.written_paths == [tmp_path / f"{tmp_path.name}.md"]
     assert any("orientation summary skipped" in reason for _, reason in result.skipped)
+
+
+def test_oversized_document_is_chunked_and_merged_into_one_section(tmp_path: Path) -> None:
+    import re
+
+    class _CountingChunkClient:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def extract_structured(self, raw_text: str, context: str = "") -> str:
+            self.calls.append(context)
+            return f"---\ntype: Fact\ntitle: Big Doc\n---\n\n## Facts\n- chunk: {raw_text[:15]}"
+
+        def summarize_sections(self, merged_sections: str) -> str:
+            return ""
+
+    big_text = "This is a paragraph of text. " * 2000  # far exceeds CHUNK_CHAR_THRESHOLD
+    (tmp_path / "big.txt").write_text(big_text, encoding="utf-8")
+    client = _CountingChunkClient()
+
+    result = ingest_folder(str(tmp_path), client=client)  # type: ignore[arg-type]
+
+    assert len(client.calls) > 1
+    assert all("part" in call for call in client.calls)
+    aggregate = (tmp_path / f"{tmp_path.name}.md").read_text(encoding="utf-8")
+    assert len(re.findall(r"^## ", aggregate, flags=re.MULTILINE)) == 1  # exactly one real h2 section
+    assert aggregate.count("### Facts") > 1  # each chunk's own heading demoted, not dropped
+    assert aggregate.count("_Source: big.txt_") == 1
+    assert result.written_paths == [tmp_path / f"{tmp_path.name}.md"]

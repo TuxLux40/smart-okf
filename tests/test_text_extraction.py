@@ -81,3 +81,54 @@ def test_extract_text_from_eml_reads_headers_and_body(tmp_path: Path) -> None:
 
     assert "Subject: Appointment reminder" in text
     assert "Your appointment is on Friday." in text
+
+
+def test_use_marker_false_never_touches_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default behavior (use_marker=False) must be unchanged for all existing callers."""
+    import shutil
+
+    def _fail_if_called(*args: object, **kwargs: object) -> None:
+        raise AssertionError("shutil.which must not be called when use_marker=False")
+
+    monkeypatch.setattr(shutil, "which", _fail_if_called)
+
+    text_path = tmp_path / "notes.txt"
+    text_path.write_text("plain text, no marker involved", encoding="utf-8")
+
+    assert extract_text_from_file(text_path) == "plain text, no marker involved"
+
+
+def test_use_marker_true_raises_clear_error_when_binary_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import shutil
+
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    pdf_path = tmp_path / "doc.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%%EOF")
+
+    with pytest.raises(DocumentIngestError, match="marker_single"):
+        extract_text_from_file(pdf_path, use_marker=True)
+
+
+def test_use_marker_true_uses_marker_output_when_binary_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import shutil
+    import subprocess
+    from pathlib import Path as _Path
+
+    monkeypatch.setattr(shutil, "which", lambda _name: "/usr/local/bin/marker_single")
+
+    def _fake_run(cmd: list[str], **kwargs: object) -> object:
+        out_dir = _Path(cmd[cmd.index("--output_dir") + 1])
+        (out_dir / "doc.md").write_text("# Marker Output\n\nExtracted table content.", encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    pdf_path = tmp_path / "doc.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%%EOF")
+
+    text = extract_text_from_file(pdf_path, use_marker=True)
+
+    assert "Extracted table content." in text

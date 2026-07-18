@@ -69,6 +69,9 @@ Humans browse folders directly · agents query via ripgrep / this skill
 | Agent-led onboarding (checks deps, detects LLM backend, writes config) | ✅ |
 | Scheduled ingest (cron/systemd timer) — same CLI, no watcher process | ✅ |
 | Git-based change tracking of the document root | ✅ |
+| Automatic chunking of oversized documents (no silent skip on large files) | ✅ |
+| JSONL log of every LLM call (model, duration, retries, success) for local debugging | ✅ |
+| Optional `--use-marker` PDF backend for layout-aware extraction (tables, forms) | ✅ Opt-in, external tool |
 | Enrichment gate, derive/dream reasoning (extra reasoning loop on top of extraction) | ⏳ Optional/later — see [Roadmap](#roadmap) |
 | Remote access for agents without filesystem access — git remote or MCP server | ⏳ Undecided — see [R1](#roadmap) |
 
@@ -83,6 +86,14 @@ See [`docs/DESIGN.md`](docs/DESIGN.md) for the full system design, scope amendme
 | [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) | Querying the knowledge base | Search |
 | `tesseract` | Image OCR | `.png`/`.jpg`/`.jpeg` ingest |
 | `ghostscript` (`gs`) | OCRmyPDF dependency | Scanned-PDF OCR |
+| [marker](https://github.com/datalab-to/marker) (`marker_single`, optional) | Layout-aware PDF extraction (tables, forms) | `--use-marker` flag |
+
+`marker` is never a dependency of this project — it's shelled out to as an external CLI (same
+pattern as `tesseract`/`ghostscript`), so its own PyTorch install and license terms stay
+completely separate from smart-okf's. Install with `pipx install marker-pdf` (or a sibling venv)
+if you want it. Its code is GPL-3.0 and its model weights use a modified OpenRAIL-M license —
+free for personal/research use and startups under $2M revenue; commercial redistribution needs a
+license from [datalab.to](https://www.datalab.to/pricing).
 
 First run? Just ask your agent to set it up — the [Onboarding](SKILL.md#onboarding-first-run) section of the skill walks through checking prerequisites, detecting a running LLM server, and choosing where your documents live.
 

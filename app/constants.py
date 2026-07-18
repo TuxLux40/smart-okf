@@ -38,6 +38,13 @@ DEFAULT_FOLDER_SUMMARY_PROMPT = (
 OCR_LANGUAGES = "deu+eng"
 """Tesseract language packs used by OCRmyPDF for scanned PDFs."""
 
+CHUNK_CHAR_THRESHOLD = 8_000
+"""Character budget, not token — the pipeline is model-agnostic (qwen/gemma/llama all
+tokenize differently), so exact token counting would need a specific tokenizer per model."""
+
+LLM_LOG_FILENAME = ".okf-llm-log.jsonl"
+"""Hidden root-level JSONL log of every LLM call: model, duration, retries, success."""
+
 IMAGE_DOCUMENT_SUFFIXES = frozenset({".png", ".jpg", ".jpeg"})
 """Accepted but not yet extractable: standalone-image OCR lands later (PDFs OCR fine)."""
 

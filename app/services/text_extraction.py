@@ -5,9 +5,17 @@ the text layer is embedded into the original PDF (searchable/editable ever after
 never needs re-running — post-OCR the PDF has text, so the OCR branch is skipped on
 later ingests. Standalone images are OCRed read-only via tesseract (images have no
 embeddable text layer, so their text lives only in the transcript/aggregate).
+
+PDF extraction has an optional `marker` backend (layout-aware: tables, forms, complex
+documents) invoked as an external CLI subprocess — never a pip dependency of this
+project. marker's code is GPL-3.0 and its model weights use a modified OpenRAIL-M
+license; shelling out to a separately-installed `marker_single` binary (same pattern as
+`tesseract`/`ocrmypdf`'s `ghostscript` dependency) keeps this MIT-licensed project's own
+dependency graph and license unaffected. See README.md for install/licensing notes.
 """
 
 import os
+import shutil
 import subprocess
 import tempfile
 from email import message_from_bytes
@@ -27,12 +35,22 @@ def is_supported_document(file_path: Path) -> bool:
     return file_path.suffix.lower() in SUPPORTED_DOCUMENT_SUFFIXES
 
 
-def extract_text_from_file(file_path: Path) -> str:
-    """Extract text from a supported document."""
+def extract_text_from_file(file_path: Path, *, use_marker: bool = False) -> str:
+    """Extract text from a supported document.
+
+    `use_marker=True` routes `.pdf` extraction through the optional marker CLI backend
+    for layout-aware extraction (tables, forms) instead of the default pdfplumber/OCRmyPDF
+    pipeline. Explicit-fail if requested but `marker_single` isn't installed, rather than
+    silently falling back — a user who opted in should know if they didn't get it.
+    """
     suffix = file_path.suffix.lower()
     if suffix in IMAGE_DOCUMENT_SUFFIXES:
         return _extract_text_from_image(file_path)
     if suffix == ".pdf":
+        if use_marker:
+            if not _marker_available():
+                raise DocumentIngestError("marker_single not found on PATH; install marker-pdf or drop --use-marker")
+            return _extract_text_from_pdf_via_marker(file_path)
         return _extract_text_from_pdf(file_path)
     if suffix == ".docx":
         return _extract_text_from_docx(file_path)
@@ -86,6 +104,30 @@ def ocr_pdf_in_place(file_path: Path) -> None:
     except Exception as error:
         temp_path.unlink(missing_ok=True)
         raise DocumentIngestError(f"OCR failed for {file_path}") from error
+
+
+def _marker_available() -> bool:
+    """Whether a separately-installed `marker_single` binary is on PATH."""
+    return shutil.which("marker_single") is not None
+
+
+def _extract_text_from_pdf_via_marker(file_path: Path) -> str:
+    """Shell out to a user-installed `marker_single` CLI for layout-aware PDF extraction."""
+    with tempfile.TemporaryDirectory() as out_dir:
+        try:
+            subprocess.run(
+                ["marker_single", str(file_path), "--output_dir", out_dir, "--output_format", "markdown"],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=600,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            raise DocumentIngestError(f"marker extraction failed for {file_path}") from error
+        produced = next(Path(out_dir).rglob("*.md"), None)
+        if produced is None:
+            raise DocumentIngestError(f"marker produced no output for {file_path}")
+        return produced.read_text(encoding="utf-8")
 
 
 def _extract_text_from_image(file_path: Path) -> str:

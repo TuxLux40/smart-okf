@@ -8,7 +8,7 @@ Usage:
     uv run python scripts/ingest_folder.py /path/to/documents
     uv run python scripts/ingest_folder.py /path/to/documents --host http://127.0.0.1:1234 --model gemma-4-e4b-it-qat
     uv run python scripts/ingest_folder.py   # no path: reads document_roots from smart-okf.yaml
-                                              # (run scripts/onboard.py once to create it)
+                                              # (see SKILL.md's Onboarding section to create one)
 """
 
 import argparse
@@ -47,6 +47,12 @@ def main() -> None:
     )
     parser.add_argument("--host", default=None, help="OpenAI-compatible server URL (default: config/env)")
     parser.add_argument("--model", default=None, help="Model name (default: config/env)")
+    parser.add_argument(
+        "--use-marker",
+        action="store_true",
+        help="Route PDF extraction through the optional marker CLI backend (layout-aware: "
+        "tables, forms). Requires a separately-installed marker_single binary on PATH.",
+    )
     parser.add_argument("--quiet", action="store_true", help="Suppress per-file progress output")
     args = parser.parse_args()
 
@@ -71,10 +77,11 @@ def main() -> None:
     elif config is not None:
         client_kwargs["model"] = config.llm_model
     client = LLMClient(**client_kwargs)
+    use_marker = args.use_marker or (config.use_marker if config is not None else False)
 
     combined = IngestFolderResult(root=Path(folders[0]))
     for folder in folders:
-        result = ingest_folder(folder, client=client, verbose=not args.quiet)
+        result = ingest_folder(folder, client=client, use_marker=use_marker, verbose=not args.quiet)
         combined.written_paths.extend(result.written_paths)
         combined.unchanged_dirs.extend(result.unchanged_dirs)
         combined.skipped.extend(result.skipped)

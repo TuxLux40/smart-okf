@@ -95,6 +95,11 @@ class SmartOkfConfig(BaseSettings):
     llm_host_allowlist: list[str] = Field(default_factory=lambda: list(DEFAULT_LLM_HOST_ALLOWLIST))
     llm_host: str = DEFAULT_LLM_HOST
 
+    use_marker: bool = False
+    """Route PDF extraction through the optional marker CLI backend (layout-aware: tables,
+    forms). Requires a separately-installed `marker_single` binary on PATH — never a
+    dependency of this project (marker's code is GPL-3.0). See README.md."""
+
     @field_validator("document_roots", mode="before")
     @classmethod
     def validate_document_roots(cls, v: list[Path | str]) -> list[Path]:

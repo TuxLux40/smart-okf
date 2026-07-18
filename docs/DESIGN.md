@@ -138,6 +138,35 @@ subcommands (or a separate `scripts/manage_cron.py`) wrapping `crontab -l`/`cron
 a marked block, so re-running install is idempotent. Depends on the access-model decision (R1)
 only loosely — independent otherwise.
 
+### 2026-07-18: chunking, call logging, marker (shipped); langfuse (rejected)
+
+User surfaced three external libraries (chonkie, langfuse, marker) found in a video. Evaluated
+and decided:
+
+- **Chunking guard (chonkie), shipped.** Confirmed real bug: no length/token guard existed
+  anywhere in the pipeline — `extract_document()` sent arbitrary-size text to the LLM in one
+  call, silently failing (3 retries then "skipped") on documents exceeding the model's context.
+  `app/services/chunking.py` splits oversized text (>`CHUNK_CHAR_THRESHOLD` chars) via
+  `chonkie.RecursiveChunker` in character-count mode (the pipeline is backend-agnostic, so a
+  real tokenizer can't be assumed); `extract_document()` extracts per chunk and
+  `merge_chunk_documents()` merges the results back into exactly one document, preserving the
+  one-file-one-aggregate-section invariant.
+- **JSONL LLM call log, shipped, as the langfuse alternative.** Langfuse (self-hosted needs
+  Postgres + ClickHouse + Redis + S3) was rejected outright — categorically heavier
+  infrastructure than anything else in this codebase, and directly contradicts the no-server/
+  no-daemon principle for what would observe an occasional cron-run batch job. Instead,
+  `LLMClient.chat()` optionally writes one JSON line per call outcome to
+  `<root>/.okf-llm-log.jsonl` (model, duration, retry count, success/failure) — dependency-free,
+  local, greppable. Wired on by default for real ingest runs (`ingest_folder()`'s default
+  client construction), silent no-op if `log_path` is unset (tests).
+- **marker opt-in PDF backend, shipped, external-CLI only.** marker (layout-aware PDF→markdown,
+  GPL-3.0 code + modified-OpenRAIL-M model weights) is invoked via `marker_single` subprocess
+  when `--use-marker`/`use_marker: true` (smart-okf.yaml) is set — never a pip dependency of
+  this project. Same external-tool pattern as `tesseract`/`ocrmypdf`'s `ghostscript`: keeps
+  marker's PyTorch install and GPL/OpenRAIL-M terms fully outside this MIT-licensed project's
+  own dependency graph, which matters given the intent to publish the skill. Explicit-fails
+  (not silent fallback) if requested but `marker_single` isn't on PATH.
+
 ---
 
 ## Overview
