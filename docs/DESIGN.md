@@ -80,6 +80,11 @@ wrapped clone — see README §"Remote access via git".
 
 #### PR R2: Cross-folder consolidation pass
 
+**Principle (2026-07-18):** **git = ingest/version timeline; MD = current distilled truth.**
+Agents should use `git log` / commit batches for “what landed together,” not changelogs inside
+aggregates. R2 is only for matters that span folders when **batch correlation is not enough**
+(same case across uploads months apart). Prefer whole-tree search + git history first.
+
 **Problem:** A single real-world matter (a utility dispute, a benefits application) is scattered
 across multiple *folders'* aggregates, not just multiple documents in one folder — the same
 cross-folder blindness the "always search the whole root" rule in `SKILL.md` works around at

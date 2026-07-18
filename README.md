@@ -5,151 +5,252 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 [![OKF v0.1](https://img.shields.io/badge/OKF-v0.1-informational.svg)](docs/OKF_SPEC.md)
 
-**Local-first [OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) knowledge base** for sensitive personal documents. Point it at a folder tree — health records, insurance, government correspondence, provider contracts — and it turns every folder into one aggregate Markdown file, extracted by an LLM you run yourself. Nothing leaves your machine, and the originals never move.
+**Local-first [OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) knowledge base** for sensitive personal documents. Point it at a folder tree — health, insurance, government mail, provider contracts — and a local LLM turns each folder into one greppable Markdown aggregate. Originals never leave your machine and never move into a proprietary DB.
 
-Ships as a [Claude Code agent skill](SKILL.md): install it once, and any skill-aware agent with local filesystem access can ingest new documents and answer questions from the knowledge base on request — no server, no daemon, no webapp. Agents *without* local filesystem access (Claude in the browser, etc.) consume the **finished Markdown** via a private git remote — see [Remote access via git](#remote-access-via-git).
+**The point of this repo is not “OCR for its own sake.”** It is that **agents retrieve correctly**: whole-tree search, distilled facts first, raw text as fallback, git for time and matter-linking — not “open the finances folder and hope.” That retrieval contract lives in [`SKILL.md`](SKILL.md) and is mandatory for any agent using this skill.
+
+Ships as a [Claude Code agent skill](SKILL.md): no server, no daemon, no webapp. Web agents without your NAS consume finished Markdown via a [private git remote](#remote-access-via-git).
 
 ---
 
 ## Contents
 
-- [Orchestrator vs. extractor](#orchestrator-vs-extractor)
-- [Why a script (not “just let the agent extract”)?](#why-a-script-not-just-let-the-agent-extract)
+- [Core concepts](#core-concepts)
+  - [Why this exists: the retrieval ladder](#why-this-exists-the-retrieval-ladder)
+  - [OKF in one paragraph](#okf-in-one-paragraph)
+  - [Orchestrator vs extractor](#orchestrator-vs-extractor)
+  - [Git vs Markdown](#git-vs-markdown)
+  - [Why a script (not pure agent inference)](#why-a-script-not-pure-agent-inference)
+- [Architecture](#architecture)
+  - [Component flow](#component-flow)
+  - [How retrieval works (implemented)](#how-retrieval-works-implemented)
+  - [What this is not](#what-this-is-not)
 - [Why not just use X?](#why-not-just-use-x)
-- [How it works](#how-it-works)
 - [Features](#features)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
 - [Quick start](#quick-start)
 - [Change tracking](#change-tracking)
 - [Remote access via git](#remote-access-via-git)
-- [LLM call log (JSONL) — not git](#llm-call-log-jsonl--not-git)
+- [LLM call log (JSONL)](#llm-call-log-jsonl)
 - [Configuration](#configuration)
 - [OKF output format](#okf-output-format)
 - [Development](#development)
 - [Roadmap](#roadmap)
 - [Core principles](#core-principles)
 
-## Orchestrator vs. extractor
+---
 
-Two separate roles, easy to conflate:
+## Core concepts
 
-| Role | Who | Does what | Sees raw PDFs/images? |
-|------|-----|-----------|------------------------|
-| **Orchestrator** | Claude Code, OpenWebUI/Hermes automation, cron, you | Decides *when* to ingest and *what* to answer; reads `SKILL.md`; runs the CLI; searches finished `.md` files | **No** (by design) |
-| **Extractor** | Local model behind `SMART_OKF_LLM_HOST` / `SMART_OKF_LLM_MODEL` (LM Studio, llama.cpp, Ollama, …) | Turns extracted text into structured OKF markdown **inside** `scripts/ingest_folder.py` | **Yes** — only on your machine |
+### Why this exists: the retrieval ladder
 
-The split is not “cron vs. agent.” The same script serves both. It is “whoever orchestrates” vs. “whichever local model the script always calls for extraction.”
+Personal life does not fit one folder name. A benefits form, a utility dispute, or “help with finances” needs **IDs, dates, and amounts scattered across** `providers/`, `finances/`, `insurances/`, `apartments/`, lawyers, etc. If an agent only opens the topically named folder, it fails — that failure mode is why smart-okf exists.
 
-**There is no mode where the orchestrating agent’s own inference *is* the extractor.** The script is a subprocess with no callback into a live agent session. That is intentional:
+**Agents must follow this ladder** (also in [`SKILL.md`](SKILL.md) — do not skip steps):
 
-1. **Privacy** — raw document bytes and full OCR text stay off cloud-hosted orchestrators, even when you drive smart-okf from Claude or another web agent.
-2. **Identical behavior** — interactive agent runs and unattended cron runs produce the same files the same way.
-3. **Portability of the *knowledge*** — web agents do not re-OCR your NAS; they read portable Markdown you already produced (often via a private git remote — below).
+| Step | Layer | Path / tool | Use for |
+|------|--------|-------------|---------|
+| 1 | **Aggregates** | `**/*.md` with `type: FolderSummary` | Distilled facts, tags, orientation summary, provenance |
+| 2 | **Transcripts (fallback)** | `.okf-transcripts/<relpath>.txt` | Exact wording, full reference numbers, quotes when the MD is thin or incomplete |
+| 3 | **Git history** | `git log`, `--grep`, `-S` | What’s new, same-batch uploads, same matter months later via IDs in messages |
+| 4 | **JSONL** | `.okf-llm-log.jsonl` | Ingest debugging **only** — never answers about the user’s documents |
 
-Env vars for the model are about the **extractor**, not “which chat model is talking to you.” The orchestrator can be Claude; the extractor stays local.
+Rules that are non-negotiable:
 
-## Why a script (not “just let the agent extract”)?
+- Search the **entire document root** with `rg`, never only one topical folder.
+- Prefer aggregates first; **if the answer needs a full ID, amount, or verbatim clause, fall back to transcripts** (hidden folder, still greppable) — do not re-OCR and do not invent.
+- Put **stable unique identifiers** into both MD bodies (extraction) and **commit messages** after ingest so matters link across folders and months.
+- Cite **source filenames** (`_Source: …_`), not only the aggregate path.
 
-Agents *can* open PDFs and write Markdown by hand for a one-off folder. That does not replace the pipeline as a **system**:
+Without that ladder written into the skill, agents will not invent it reliably. Encoding it is the product.
 
-| Need | Pure “agent + instructions” | Script (`scripts/ingest_folder.py`) |
-|------|----------------------------|-------------------------------------|
-| Privacy of raw docs | Raw text enters the orchestrator’s context | Extractor stays local; orchestrator only sees `.md` / search hits you open |
-| Sunday 3am re-ingest | No agent online | Cron runs the same CLI |
-| Incremental skip | Easy to forget / re-do everything | SHA-256 `source_hashes` — unchanged files cost zero LLM calls |
-| OCR, marker, transcripts, heading demotion | Fragile to re-prompt every time | Owned once, tested |
-| Same result for Claude, Hermes, OpenWebUI, cron | Each agent reinvents steps | One tool, one contract |
+### OKF in one paragraph
 
-So the script is not mainly “to make agents type less.” It is the **extractor engine**: deterministic, schedulable, local. The skill (`SKILL.md`) teaches agents how to drive it and how to query the results.
+[Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) is Google’s idea of knowledge as **plain Markdown + YAML frontmatter** — concepts you can `cat`, `rg`, and git — not a closed database. You were already heading the same direction (LLM transcripts + structured notes agents can search). smart-okf adopts OKF’s shape and adds a practical layout for personal archives: **one aggregate concept per folder** (not one `.md` per PDF), provenance fields, hash-incremental re-ingest, and the retrieval ladder above. Spec details: [`docs/OKF_SPEC.md`](docs/OKF_SPEC.md).
 
-**Portability split:**
+### Orchestrator vs extractor
 
-- **Most portable for web agents** = finished `.md` aggregates (and optionally a private git remote of them), not “run the whole OCR stack in the browser.”
-- **Most portable for knowledge** = plain folders + Markdown + git history — no DB, no smart-okf daemon to keep running just to answer questions.
+| Role | Who | Job | Sees raw PDFs? |
+|------|-----|-----|----------------|
+| **Orchestrator** | Claude Code, Hermes, OpenWebUI automation, cron, you | When to ingest; how to **retrieve** and answer (`SKILL.md` + `rg` + git) | **No** |
+| **Extractor** | Local model (`SMART_OKF_LLM_HOST` / `MODEL`) | Structure text → OKF **inside** `scripts/ingest_folder.py` | **Yes**, only on your machine |
+
+There is no mode where the chat agent *is* the extractor. The script is a subprocess. That keeps raw document text off cloud orchestrators and makes cron behave like interactive runs.
+
+### Git vs Markdown
+
+| Layer | Holds | Does not hold |
+|-------|--------|----------------|
+| **Aggregates (HEAD)** | Current distilled truth | A changelog of every ingest |
+| **Git history** | When knowledge appeared/changed; batch co-arrival; ID-tagged commits | The only place for current facts (those live in MD) |
+
+**Two birds:** (1) one commit after a batch upload correlates co-arrival across folders; (2) **IDs in the commit message** (Aktenzeichen, contract #, …) make the same matter greppable months later. Case-event dates from the documents still belong **in the MD body** as facts. Root “one matter” files (roadmap R2) only when IDs + batches still aren’t enough.
+
+### Why a script (not pure agent inference)
+
+| Need | Pure agent on PDFs | Script |
+|------|-------------------|--------|
+| Privacy of raw docs | Bytes enter cloud context | Extractor stays local |
+| Unattended re-ingest | No agent online | Cron runs the same CLI |
+| Incremental skip | Easy to re-do everything | `source_hashes` |
+| OCR / marker / transcripts / heading rules | Re-prompt fragile | Implemented once |
+| Same result for every orchestrator | Each agent reinvents | One contract |
+
+The skill teaches **retrieval + when to run the engine**. The script *is* the engine.
+
+---
+
+## Architecture
+
+### Component flow
+
+```mermaid
+flowchart TB
+  subgraph orchestrators["Orchestrators — when / what · never raw PDFs"]
+    Agent["Agent + SKILL.md"]
+    Cron["Cron / systemd"]
+    Human["You"]
+  end
+
+  subgraph skill["smart-okf skill repo"]
+    CLI["scripts/ingest_folder.py"]
+    subgraph services["app/services"]
+      Ingest["ingest.py"]
+      Extract["text_extraction.py"]
+      Chunk["chunking.py"]
+      LLM["llm_client.py"]
+      Opts["extraction_options.py"]
+    end
+    Models["app/models/okf.py"]
+    Prompts["prompts/*.md"]
+    Config["smart-okf.yaml / env"]
+  end
+
+  subgraph local_machine["Machine with model + tools"]
+    ExtTools["marker_single · tesseract · gs · rg"]
+    Extractor["Local extractor LLM"]
+  end
+
+  subgraph docs["Document root"]
+    Sources["Sources PDF/docx/…"]
+    Agg["Aggregates folder/folder.md"]
+    Tx[".okf-transcripts/ fallback"]
+    Log[".okf-llm-log.jsonl ops"]
+    GitLocal["git history"]
+  end
+
+  subgraph remote["Remote"]
+    GitRemote["Private git remote"]
+    WebAgent["Web agents · .md + git"]
+  end
+
+  Agent --> CLI
+  Cron --> CLI
+  Human --> CLI
+  Agent -.->|1 rg aggregates| Agg
+  Agent -.->|2 fallback rg| Tx
+  Agent -.->|3 git log| GitLocal
+
+  Config --> CLI
+  CLI --> Ingest
+  Ingest --> Extract
+  Ingest --> Chunk
+  Ingest --> LLM
+  Ingest --> Models
+  Extract --> Opts
+  Extract --> ExtTools
+  LLM --> Extractor
+  LLM --> Prompts
+  LLM --> Log
+  Sources --> Extract
+  Extract --> Tx
+  Chunk --> LLM
+  Ingest --> Agg
+  Agg --> GitLocal
+  GitLocal -->|push| GitRemote
+  GitRemote --> WebAgent
+```
+
+**Install tools** (`uv`, CLIs, LLM server) on the machine that runs ingest — not necessarily on a NAS that only stores documents.
+
+### How retrieval works (implemented)
+
+This is the retrieval system. It is intentional and complete for the current product:
+
+| Mechanism | Role |
+|-----------|------|
+| **ripgrep** over aggregates | Primary full-text search of distilled knowledge |
+| **Read aggregates** | Orientation summary + per-source sections + frontmatter |
+| **ripgrep over `.okf-transcripts/`** | **Mandatory fallback** when MD is thin (full IDs, quotes) |
+| **git log / grep / pickaxe (`-S`)** | Time, batches, ID-linked history |
+| **Provenance lines** | Cite real filenames |
+| **Whole-tree search** | Cross-folder blindness prevention |
+
+There is **no separate search daemon**. Q&A does not call the extractor LLM. Ingest writes the layers; the skill tells agents how to walk them.
+
+### What this is not
+
+These are **common industry approaches to large-corpus search**, not missing checklist items you “forgot,” and **not** on the committed roadmap unless you later hit scale pain:
+
+| Approach | What it is | Why not default here |
+|----------|------------|----------------------|
+| Vector / embedding RAG | Chunk → embed → nearest-neighbor | Privacy, infra, weaker exact-ID match than `rg` on structured MD |
+| BM25 / search engine service | Ranked full-text server | Extra process; plain `rg` + good extraction is enough for personal archives |
+| Graph DB of entities | Explicit matter graph | R2-style MD/git is lighter for this use case |
+| Query rewriter / multi-hop agent framework | Extra model loops | The ladder *is* the multi-hop procedure |
+
+If folders grow huge and `rg` alone feels weak, *then* evaluate BM25 or hybrid search — as an optional upgrade, not a prerequisite for usefulness.
+
+---
 
 ## Why not just use X?
 
-## Why not just use X?
+| Alternative | Good fit if… | Gap |
+|-------------|----------------|-----|
+| **[Paperless-ngx](https://docs.paperless-ngx.com/)** | Mature OCR + search + correspondents | Docs live in its DB; no LLM-distilled greppable OKF facts next to files |
+| **OpenWebUI RAG** | Chat with PDFs, zero structure | No portable structured facts, weak provenance, no agent retrieval contract |
 
-Mature alternatives exist and are worth trying first:
+smart-okf’s differentiator: **structured facts in plain Markdown beside originals** + **explicit agent retrieval ladder** + **git as timeline** — no required cloud, no required DB.
 
-| Alternative | Good fit if... | Gap |
-|---|---|---|
-| **[Paperless-ngx](https://docs.paperless-ngx.com/)** | You want mature OCR + full-text search + "Correspondents" (doctors, insurers, ISPs) out of the box | Documents live in its DB, not plain files; no LLM-extracted structured facts |
-| **OpenWebUI RAG** | You just want to chat with a folder of PDFs, zero setup | No structured facts, no human-browsable output, no provenance |
-
-Neither combines all three of: LLM-extracted structured facts, files that stay plain Markdown next to the originals (`git clone` + `cat` is all you need to read the whole thing — no DB, no server), and a format any agent can traverse without a bespoke SDK. That combination is smart-okf's reason to exist. If you don't need the git-portable, no-server-required property, Paperless-ngx or OpenWebUI RAG will get you there faster.
-
-## How it works
-
-```
-Document folders (local storage)
-        │  manual or cron-scheduled ingest
-        ▼
-text extraction (+ in-place OCR)  →  your LLM  →  one OKF .md per folder
-        │
-        ▼
-Humans browse folders directly · agents query via ripgrep / this skill
-```
-
-1. Point smart-okf at a document folder — once, or on a schedule (cron/systemd timer).
-2. Each supported file is read: PDFs via external `marker_single` by default (layout-aware;
-   opt out with `--no-marker` for `pdfplumber` + in-place OCRmyPDF), `.docx`/`.eml`/`.csv`/`.xlsx`/`.txt`
-   natively, images via `tesseract` or an optional vision model.
-3. Your **local extractor** LLM structures facts per file into [OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) markdown — any OpenAI chat-completions server: llama.cpp, LM Studio, Ollama, vLLM. (The orchestrating agent is separate — see above.)
-4. Every folder's extractions merge into **one aggregate `.md` in that folder** — non-recursive, a subfolder gets its own separate aggregate — with a synthesized orientation summary on top and full per-file provenance below.
-5. Humans browse folders directly; agents query the aggregates via ripgrep, or invoke this skill.
-
-**Where to install tools:** `uv`, system CLIs (`rg`, `tesseract`, `gs`, `marker_single`), and the
-LLM server run on the **machine that performs ingest** (usually the one with the GPU/CPU model).
-Document roots may live on a NAS/mount; you do **not** need to install PyTorch/marker on the
-NAS itself.
+---
 
 ## Features
 
 | Capability | Status |
-|---|---|
-| One aggregate OKF `.md` per folder, non-recursive (`providers/` → `providers/providers.md`) | ✅ |
-| PDF, `.txt`, `.docx`, `.eml`, `.csv`, `.xlsx`, and image (`.png`/`.jpg`/`.jpeg`) ingest | ✅ |
-| Scanned-PDF OCR, embedded in the PDF itself (OCRmyPDF, deu+eng) — runs once, ever | ✅ |
-| Standalone image OCR (tesseract, read-only) | ✅ |
-| Raw transcript store (`.okf-transcripts/`) — lossless full text, extraction never repeats | ✅ |
-| Hash-incremental re-ingest — unchanged files make zero LLM calls | ✅ |
-| Synthesized per-folder summary + mermaid timeline for dated events | ✅ |
-| Agent-led onboarding (checks deps, detects LLM backend, writes config) | ✅ |
-| Scheduled ingest (cron/systemd timer) — same CLI, no watcher process | ✅ |
-| Git change tracking of the document root (local history + optional private remote for web agents) | ✅ |
-| Automatic chunking of oversized documents (character budget; no silent skip on large files) | ✅ |
-| JSONL log of every LLM call (model, duration, retries, success) — local debug telemetry, not knowledge | ✅ |
-| Layout-aware PDF extraction via marker (tables, forms) — external tool, opt out with `--no-marker` | ✅ Default on |
-| Handwriting transcription + scene description for standalone images, via an optional vision-capable model (`--vision-model`) — no extra dependency, no face identification | ✅ Opt-in, falls back to tesseract-only OCR |
-| Remote access for agents without local filesystem — **private git remote of aggregates** (Gitea/GitLab/…); MCP optional glue | ✅ Decision: git; see [Remote access via git](#remote-access-via-git) |
-| Enrichment gate, derive/dream / cross-folder consolidation (extra reasoning on top of extraction) | ⏳ Optional/later — see [Roadmap](#roadmap) |
+|------------|--------|
+| One aggregate OKF `.md` per folder, non-recursive | ✅ |
+| PDF, txt, docx, eml, csv, xlsx, images | ✅ |
+| marker PDF backend (external CLI; `--no-marker` → pdfplumber + OCRmyPDF) | ✅ Default on |
+| Raw transcripts `.okf-transcripts/` (lossless + **query fallback**) | ✅ |
+| Hash-incremental re-ingest (`source_hashes`) | ✅ |
+| Orientation summary + optional mermaid timeline | ✅ |
+| Chunking oversized text (character budget) | ✅ |
+| Optional vision model for handwriting + scene | ✅ Opt-in |
+| Agent skill with **mandatory retrieval ladder** | ✅ |
+| Git timeline + ID-bearing commits | ✅ Convention |
+| Private git remote for web agents | ✅ Decision (R1) |
+| JSONL LLM call log (ops, not knowledge) | ✅ |
+| Cross-folder auto “matter” files | ⏳ R2 if needed |
+| Vector RAG / BM25 service | ❌ Not planned as default — see [What this is not](#what-this-is-not) |
 
-See [`docs/DESIGN.md`](docs/DESIGN.md) for the full system design, scope amendments, and why each optional piece was cut or deferred.
+---
 
 ## Prerequisites
 
-| Tool | Purpose | Required for |
-|---|---|---|
-| [uv](https://docs.astral.sh/uv/) | Python package/venv management | Everything |
-| An OpenAI-compatible LLM server | Structured extraction | [Ollama](https://ollama.com/), [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server`, LM Studio, or vLLM — local or LAN, your choice |
-| [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) | Querying the knowledge base | Search |
-| `tesseract` | Image OCR | `.png`/`.jpg`/`.jpeg` ingest |
-| `ghostscript` (`gs`) | OCRmyPDF dependency | Scanned-PDF OCR |
-| [marker](https://github.com/datalab-to/marker) (`marker_single`) | Layout-aware PDF extraction (tables, forms) | PDF ingest — on by default, opt out with `--no-marker` |
+| Tool | Purpose |
+|------|---------|
+| [uv](https://docs.astral.sh/uv/) | Python env |
+| OpenAI-compatible LLM server | Extraction (LM Studio, llama.cpp, Ollama, vLLM) |
+| [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) | **Query** |
+| `tesseract`, `ghostscript` | Image OCR / OCRmyPDF path |
+| [marker](https://github.com/datalab-to/marker) `marker_single` | Default PDF path — **external** install (`pipx install marker-pdf`), not a pip dep of this repo |
 
-`marker` is **never bundled or listed in this repo's `pyproject.toml`**. Onboarding (or you)
-installs it *externally* when the skill is set up — `pipx install marker-pdf` (or a sibling
-venv) puts `marker_single` on PATH, same pattern as `tesseract`/`ghostscript`. The skill only
-shells out to that binary. That keeps PyTorch weight and marker's GPL-3.0 / modified OpenRAIL-M
-terms out of smart-okf's own MIT dependency graph (important if you publish the skill). Free for
-personal/research use and startups under $2M revenue; commercial redistribution needs a license
-from [datalab.to](https://www.datalab.to/pricing). Pass `--no-marker` / `use_marker: false` for
-pdfplumber+OCRmyPDF only (no marker install).
+marker: GPL-3.0 + modified OpenRAIL-M weights; free for personal/research use; commercial redistribution may need a [datalab.to](https://www.datalab.to/pricing) license. Opt out with `--no-marker`.
 
-First run? Just ask your agent to set it up — the [Onboarding](SKILL.md#onboarding-first-run) section of the skill walks through checking prerequisites, detecting a running LLM server, and choosing where your documents live.
+First run: ask your agent to follow [Onboarding](SKILL.md#onboarding-first-run).
+
+---
 
 ## Installation
 
@@ -157,163 +258,104 @@ First run? Just ask your agent to set it up — the [Onboarding](SKILL.md#onboar
 git clone https://github.com/TuxLux40/smart-okf.git
 cd smart-okf
 uv sync --group dev
+ln -s "$(pwd)" ~/.claude/skills/smart-okf   # Claude Code skill
 ```
 
-To use it as a skill for Claude Code or another skill-aware agent, symlink the repo into the agent's skill directory:
-
-```bash
-ln -s "$(pwd)" ~/.claude/skills/smart-okf
-```
+---
 
 ## Quick start
 
-### 1. Ingest a folder
+### 1. Ingest
 
 ```bash
 uv run python scripts/ingest_folder.py /path/to/your/documents \
   --host http://127.0.0.1:1234 --model <your-model>
 ```
 
-Each folder gets one aggregate Markdown file, named after the folder, covering every supported file directly inside it — subfolders get their own, separate aggregate:
-
 ```
 documents/
-├── documents.md      ← generated: aggregate of contract.pdf + notes.txt
+├── documents.md      ← aggregate of files in this folder only
 ├── contract.pdf
-├── notes.txt
 └── genealogy/
-    ├── genealogy.md  ← generated: separate aggregate, just this folder's files
+    ├── genealogy.md  ← separate aggregate
     └── birth.pdf
 ```
 
-### 2. Re-run whenever documents change
+### 2. Re-run when files change
 
 ```bash
 uv run python scripts/ingest_folder.py /path/to/your/documents
+# or, with smart-okf.yaml:
+uv run python scripts/ingest_folder.py
 ```
 
-Re-runs are incremental — unchanged files (tracked by SHA-256 in `source_hashes` frontmatter) are never re-sent to the LLM. Once `smart-okf.yaml` exists, drop the path entirely:
-
-```bash
-uv run python scripts/ingest_folder.py   # ingests every configured document_roots entry
-```
-
-Same command for cron:
+Incremental: unchanged SHA-256 → no LLM call.
 
 ```cron
 0 3 * * 0  cd /path/to/smart-okf && uv run python scripts/ingest_folder.py
 ```
 
-### 3. Ask questions through the skill
+### 3. Query via the skill
 
-Once symlinked, just ask your agent — it searches the whole document tree (never just one topically-named folder, since real questions cut across folders) and answers from the aggregates, citing the source document.
+Ask the agent a real question. It **must** use the [retrieval ladder](#why-this-exists-the-retrieval-ladder): whole-tree `rg` on aggregates → transcripts if thin → git for history/IDs. Not “open one folder and guess.”
+
+---
 
 ## Change tracking
 
-The document root is a plain git repository so agents (and you) can see what an ingest run
-actually changed:
+After each ingest, commit the document root. **Commit messages must include stable IDs** from new/changed sections:
 
 ```bash
-cd /path/to/your/documents
-git init && git add -A && git commit -m "Initial snapshot"
-
-# after a later ingest run:
-git add -A && git commit -m "Ingest: $(date +%F)"
-git diff HEAD~1 -- '*.md'      # see exactly what the last ingest changed
-git log --stat                 # history of ingest runs over time
+git add -A
+git commit -m "Ingest 2026-07-18: EON 407631050, Rheinpower; providers+finances"
+git log --grep='407631050' -i
+git log -S '407631050' -- '*.md'
 ```
 
-This is what makes re-ingest safe to run unattended: a synthesized summary that came out wrong,
-or an in-place PDF OCR pass that misbehaved, is a `git revert` away instead of a silent,
-unrecoverable overwrite. Locally you can track originals *and* generated `.md` aggregates in the
-same repo — diffing both together is the point.
+See [Git vs Markdown](#git-vs-markdown). Bad OCR/summary → `git revert`, not silent loss.
 
-The same git history is also the **sync plane** for remote agents (next section). That is a
-different job from the LLM call log (the section after that).
+---
 
 ## Remote access via git
 
-**Decision (R1): git is the remote access mechanism** — not a custom smart-okf API server, and
-not “re-run extraction in the browser.”
+**R1 decided:** private git remote (Gitea / Forgejo / GitLab self-hosted, ideally Tailscale) of aggregates — not a smart-okf API server, not re-OCR in the browser.
 
-Typical flow:
+1. Ingest locally  
+2. Commit (with IDs)  
+3. Push (often **Markdown-only**; keep PDFs on NAS)  
+4. Web agents clone/pull or use a host connector  
 
-1. Ingest runs **on your machine** (local extractor + scripts) against the document tree.
-2. Commit the resulting **aggregates** (and whatever else you choose to publish).
-3. `git push` to a **private** remote you control — [Gitea](https://about.gitea.com/),
-   [Forgejo](https://forgejo.org/), GitLab self-hosted, etc. Prefer private network / Tailscale
-   over a public GitHub repo for sensitive personal docs.
-4. Web agents (Claude, etc.) **consume Markdown**, not raw PDFs: clone/pull the private remote,
-   or point a knowledge/project connector at that checkout.
+Gitea is a **git remote**, not an MCP server. Optional MCP can wrap a *clone*; git stays source of truth.
 
-**What to push.** Many setups push only `**/*.md` aggregates (and maybe a thin README) and keep
-binaries/PDFs on the NAS only — smaller remote, less sensitive bulk, still enough for most
-questions. Others push the full tree for true `git clone` backup. Choose explicitly; do not
-assume “the whole documents folder must go to the remote.”
+---
 
-**Claude web and MCP.** A private Gitea/GitLab remote is a **git repo**, not an MCP server by
-itself. Common patterns:
+## LLM call log (JSONL)
 
-| Pattern | What it is |
-|---------|------------|
-| Clone/pull on a machine the agent can read | Simplest: skill or human updates a local clone; agent searches `.md` |
-| Custom MCP that wraps a checkout | An MCP server (search/read tools) running against a clone of *your* private remote — MCP is glue, git remains source of truth |
-| Host-native “add this repo / knowledge” | Depends on the product (Claude Projects, connectors, etc.); still usually ends up as Markdown-in, not OCR-in |
-
-So: **yes — private git is the right sync mechanism for the `.md`s.** MCP is optional tooling on
-top of a clone if a product wants tool-calling APIs; it is not a substitute for the remote, and
-you do not need a smart-okf daemon for web agents to answer from already-ingested knowledge.
-
-## LLM call log (JSONL) — not git
-
-During evaluation of external tools (chonkie / langfuse / marker), **langfuse** was considered
-for “what did each LLM call do?” Self-hosted langfuse wants Postgres + ClickHouse + Redis + S3 —
-far heavier than a cron batch job justifies. Instead, ingest appends one JSON line per call
-outcome to:
-
-```text
-<path-to-documents>/.okf-llm-log.jsonl
-```
-
-Each line roughly: timestamp, **model actually used**, host, prompt size, duration, retry count,
-success/failure, error string. Grep it when something is flaky:
+`<documents>/.okf-llm-log.jsonl` — model, duration, retries, success. **Ops only.** Usually gitignored. Not part of the retrieval ladder for user questions.
 
 ```bash
 rg '"success": false' /path/to/documents/.okf-llm-log.jsonl
 ```
 
-**Why not git for that?**
-
-| | Git (document root) | JSONL LLM log |
-|--|---------------------|---------------|
-| **Job** | History of *knowledge files* (aggregates, maybe originals) | *Operational* telemetry of extractor calls |
-| **Shape** | Meaningful snapshots humans/agents review | High-churn, append-only, one line per attempt |
-| **Volume** | Commits after ingest runs | Can grow every retry, chunk, vision call |
-| **Tracked?** | Yes — commit what you care about | Usually **gitignored** (noise, no useful diff) |
-
-Git answers: “what did the last ingest change in `EON.md`?”  
-JSONL answers: “why did that PDF burn three retries and 90 seconds on model X?”
-
-They do not replace each other. (JSONL is also **not** from the chunking code — chunking only
-splits long text before extraction; logging is a separate ~30-line append in `LLMClient`.)
+---
 
 ## Configuration
 
-`SmartOkfConfig` (`app/config.py`) loads settings in this order (lowest → highest precedence): field defaults → `smart-okf.yaml` (or `~/.config/smart-okf/smart-okf.yaml`) → environment variables (`SMART_OKF_` prefix). Copy [`smart-okf.example.yaml`](smart-okf.example.yaml) to `smart-okf.yaml`, or let the [onboarding flow](SKILL.md#onboarding-first-run) write it for you.
+Load order: field defaults → `smart-okf.yaml` → `SMART_OKF_*` env. See [`smart-okf.example.yaml`](smart-okf.example.yaml) and [onboarding](SKILL.md#onboarding-first-run).
 
-| Variable | Default | Description |
-|---|---|---|
-| `SMART_OKF_LLM_HOST` | `http://localhost:11434` | Any OpenAI-compatible `/v1/chat/completions` endpoint (must be localhost/RFC1918/allowlisted unless `allow_remote_llm`) |
-| `SMART_OKF_LLM_MODEL` | `qwen2.5:3b` | Model name for extraction |
-| `SMART_OKF_LLM_API_KEY` | `not-needed` | API key, only if your server requires one |
-| `SMART_OKF_VISION_MODEL` | unset | Vision-capable model (served by `SMART_OKF_LLM_HOST`) for standalone image ingest — handwriting transcription + scene description. Unset: images fall back to tesseract-only OCR, no vision capability |
-| `SMART_OKF_CONFIG` | `smart-okf.yaml` | Path to the YAML config file |
+| Variable | Default | Role |
+|----------|---------|------|
+| `SMART_OKF_LLM_HOST` | `http://localhost:11434` | Extractor endpoint |
+| `SMART_OKF_LLM_MODEL` | `qwen2.5:3b` | Extractor model |
+| `SMART_OKF_LLM_API_KEY` | `not-needed` | If required |
+| `SMART_OKF_VISION_MODEL` | unset | Optional vision for images |
+| `SMART_OKF_CONFIG` | `smart-okf.yaml` | Config path |
 
-Supported document suffixes live in [`app/constants.py`](app/constants.py): `.pdf`, `.txt`, `.docx`, `.eml`, `.csv`, `.xlsx`, `.png`, `.jpg`, `.jpeg`.
+Remote non-allowlisted hosts need `allow_remote_llm`. Suffixes: [`app/constants.py`](app/constants.py).
+
+---
 
 ## OKF output format
-
-Each folder's aggregate is OKF markdown: YAML frontmatter, a synthesized orientation summary, then one body section per source document.
 
 ```yaml
 ---
@@ -329,87 +371,76 @@ source_hashes:
   isp.pdf: 9c02...
 ---
 
-Two contracts on file: an apartment lease and an ISP agreement, both active as of 2024.
+Orientation summary…
 
 ## Lease
 
 _Source: lease.pdf_
 
-...key terms and dates...
+…
 
 ## Isp
 
 _Source: isp.pdf_
 
-...contract details...
+…
 ```
 
-Models and serialization: [`app/models/okf.py`](app/models/okf.py). Full format spec, reserved filenames, and type vocabulary: [`docs/OKF_SPEC.md`](docs/OKF_SPEC.md).
+Code: [`app/models/okf.py`](app/models/okf.py). Conventions: [`docs/OKF_SPEC.md`](docs/OKF_SPEC.md).
+
+---
 
 ## Development
 
 ```bash
 uv sync --group dev
-
-# Lint, format, type-check, test
 uv run ruff check --fix . && uv run ruff format .
 uv run mypy app scripts tests
 uv run pytest -q
 ```
 
-CI runs the same checks on every push/PR to `main` ([`.github/workflows/python.yml`](.github/workflows/python.yml)).
-
-### Project layout
-
 ```
 app/
-├── config.py               # SmartOkfConfig (YAML + env settings)
-├── constants.py            # Shared defaults
-├── exceptions.py           # LLMClientError, DocumentIngestError
-├── models/okf.py           # OKFFrontmatter, OKFDocument
-└── services/
-    ├── ingest.py            # Per-folder aggregate ingest (non-recursive, hash-incremental)
-    ├── llm_client.py         # OpenAI-compatible chat + extraction + summary synthesis
-    ├── text_extraction.py    # PDF/docx/eml/csv/xlsx + marker/OCRmyPDF + tesseract
-    ├── chunking.py           # Character-budget split for oversized docs
-    ├── extraction_options.py # Extraction policy (marker on/off, …)
-    └── prompts.py
-SKILL.md                     # Agent skill entry point (onboarding, ingest, query)
-prompts/                     # LLM system prompts
-scripts/ingest_folder.py     # CLI: agent + cron entry point
-docs/
-├── DESIGN.md                 # System design, scope amendments, roadmap
-└── OKF_SPEC.md                # OKF format spec + smart-okf conventions
-tests/
+├── config.py
+├── models/okf.py
+└── services/          # ingest, llm_client, text_extraction, chunking, …
+SKILL.md               # onboarding · ingest · **retrieval ladder**
+scripts/ingest_folder.py
+docs/OKF_SPEC.md
+docs/DESIGN.md
+docs/HANDOFF_FOR_CLAUDE.md
 ```
 
-Agent-oriented docs: [`AGENTS.md`](AGENTS.md), [`AGENT_GUIDES.md`](AGENT_GUIDES.md).
+---
 
 ## Roadmap
 
-Committed scope stays small on purpose: ingest → per-folder aggregate → ripgrep search, run by hand or on a schedule. Optional follow-ons in [`docs/DESIGN.md`](docs/DESIGN.md):
+- **R1** — Private git remote: **decided** (ops examples only)
+- **R2** — Cross-folder matter files when IDs + git batches aren’t enough
+- **R3** — Extraction verbosity valve  
+- **R4** — Semantic near-duplicates  
+- **R5** — Cron install/list/remove helpers  
+- **R6** — Docling as optional backend (evaluated, not adopted)
 
-- **R1 — Remote agent access**: **decided — private git remote** of aggregates (Gitea/GitLab/…); MCP only as optional glue on a clone. See [Remote access via git](#remote-access-via-git). Remaining work is operational docs/examples, not an API server.
-- **R2 — Cross-folder consolidation**: root-level concept files linking a matter that spans multiple folders' aggregates
-- **R3 — Extraction verbosity valve**: tunable extraction detail (what's noise to one user is signal to another)
-- **R4 — Semantic near-duplicate detection**: catches look-alike documents that hash comparison can't
-- **R5 — Cron management commands**: install/list/remove the scheduled job, not just a documented crontab line
-- **R6 — Docling as a swappable PDF/docx/xlsx/eml extraction backend**: MIT-licensed alternative to marker; unifies more formats behind one API and has native `.eml` support, but pulls in PyTorch same as marker and its native output isn't markdown — evaluated 2026-07-18, not adopted (see `docs/DESIGN.md`), worth a real look only if pdfplumber/OCRmyPDF quality becomes a specific pain point
+History and cut scope: [`docs/DESIGN.md`](docs/DESIGN.md).
 
-Full historical design — including the since-cut folder watcher, per-file companions, and Ollama-only LLM client — plus the amendments explaining what changed and why: [`docs/DESIGN.md`](docs/DESIGN.md). Legacy notes: [`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md).
+---
 
 ## Core principles
 
-- **Privacy & local-only** — raw extraction on your hardware; cloud orchestrators see finished Markdown, not PDFs, unless you deliberately open them.
-- **Files stay yours** — originals never move into a proprietary DB; co-located aggregates + git are the backup/sync story.
-- **Human + agent usable** — browse folders natively; local agents use the skill + ripgrep; remote agents use a private git remote of `.md`s.
-- **OKF native** — portable, git-friendly, structured markdown with full provenance.
-- **Bring your own LLM** — any OpenAI-compatible chat-completions server for *extraction*, no vendor lock-in.
-- **Script = extractor engine; skill = how to drive it** — not “agent reinvents OCR every time.”
+1. **Retrieval ladder is the product** — agents must be told explicitly; whole tree → aggregates → **transcripts as fallback** → git; never JSONL for answers.  
+2. **Privacy & local extraction** — raw PDFs stay off cloud orchestrators.  
+3. **Files stay yours** — no proprietary document DB.  
+4. **Git = timeline; MD = current truth** — IDs in bodies and commit messages.  
+5. **OKF native** — portable Markdown + frontmatter.  
+6. **Script = extractor; skill = retrieval + control plane.**  
+7. **Bring your own local LLM** for extraction.
+
+---
 
 ## Related
 
-Inspired by understory (Codacus), Karpathy's LLM-wiki approach, and Google's [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf). Format details: [`docs/OKF_SPEC.md`](docs/OKF_SPEC.md).
+Inspired by understory (Codacus), Karpathy-style LLM wikis, and Google’s [OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf). Format: [`docs/OKF_SPEC.md`](docs/OKF_SPEC.md).
 
 ## License
 

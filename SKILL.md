@@ -88,46 +88,101 @@ the extractor must be local/LAN if privacy of raw documents matters.
 
 ## Query (default operation)
 
-Answer questions from existing aggregates — no LLM server needed, they're plain markdown.
+Answer from existing knowledge — no extractor LLM needed for Q&A. Retrieval is **not** a
+vector DB: it is **whole-tree ripgrep + read + git**, with an explicit fallback ladder.
+**You must follow this ladder**; do not only open the topically named folder.
 
-**Always search the entire documents root, never just the topically-named folder.** Example: Real-life
-processes cut across the folder taxonomy: a government benefits application needs data from
-`finances/` AND `insurances/` AND `providers/` AND `apartments/`; a dispute with a utility
-provider spans `providers/`, `finances/`, and `lawyers/`. Answering "help with finances" from
-`finances/` alone silently misses reference numbers, dates, and amounts that
-live elsewhere — the single most common failure mode this KB exists to prevent.
+### Retrieval ladder (do this every time)
 
-1. Find candidate aggregates with ripgrep **from the root**. Aggregates are named after their
-   folder and carry `type: FolderSummary` frontmatter:
+| Step | Where | Use for |
+|------|--------|---------|
+| 1 | **Aggregates** (`**/*.md` with `type: FolderSummary`) | Distilled facts, tags, orientation summary, provenance — **always start here** |
+| 2 | **Transcripts (mandatory fallback)** (`.okf-transcripts/`) | When MD is thin, partial, or missing a full ID/amount/quote — search here **before** re-ingest or guessing. Hidden folder; greppable; lossless raw extract |
+| 3 | **Git history** | “What’s new,” same-batch uploads, ID-tagged commits months later |
+| 4 | **JSONL** (`.okf-llm-log.jsonl`) | Ingest debugging only — **not** knowledge retrieval |
+
+**Transcripts are not optional polish.** Ingest always writes them so agents never need to re-OCR for exact strings. If step 1 does not fully answer the question, you **must** run step 2.
+
+**Always search the entire documents root**, never just the topically-named folder. Real
+processes cut across the taxonomy (benefits ↔ finances ↔ insurance ↔ providers; utility
+dispute ↔ bank ↔ lawyers). Missing cross-folder IDs is the main failure mode this KB exists
+to prevent.
+
+1. **Find candidates** with ripgrep from the root:
 
    ```bash
-   rg -l --glob '*.md' 'type: FolderSummary' /path/to/documents      # list all aggregates
-   rg -i -C3 'vodafone|kündigungsfrist' /path/to/documents --glob '*.md'   # content search, whole tree
+   rg -l --glob '*.md' 'type: FolderSummary' /path/to/documents
+   rg -i -C3 'vodafone|kündigungsfrist|aktenzeichen|vertragsnummer' /path/to/documents --glob '*.md'
    ```
-2. Read the matching aggregate(s). Each has YAML frontmatter (`sources:` lists the original
-   files), an orientation summary at the top for folders with 2+ documents (a few sentences,
-   sometimes a mermaid timeline of key dates), then one `## <Title>` body section per source
-   document with `_Source: <filename>_` provenance lines.
-3. When an aggregate's summary is too thin for the question (a specific amount, a full
-   reference number, exact wording), read the **raw transcript** instead of re-extracting:
-   `<root>/.okf-transcripts/<relative-path>.txt` holds the complete extracted text of every
-   ingested file. Search it directly: `rg -i 'aktenzeichen' /path/to/documents/.okf-transcripts/`.
-4. Answer, citing the source document filename(s) from the provenance lines — not just the
-   aggregate. If the aggregate looks stale or thin (the folder has more source files than
-   `sources:` lists), say so and offer to re-ingest that folder.
 
-If no aggregate exists for the relevant folder yet, offer to ingest it first.
+2. **Read matching aggregates.** Frontmatter has `sources:`; body has orientation summary
+   (folders with 2+ docs), then `## <Title>` sections with `_Source: <filename>_`.
+
+3. **Fallback to transcripts** if the aggregate is thin (partial ID, missing amount, exact
+   quote, “not sure”): search `.okf-transcripts/`, not the binary original and not a re-ingest
+   unless the transcript is also missing:
+
+   ```bash
+   rg -i 'aktenzeichen|kundennummer|vertragsnummer' /path/to/documents/.okf-transcripts/
+   ```
+
+   Skipping this step when the MD is incomplete is a retrieval failure.
+
+4. **Link matters over time** with IDs + git (see Change tracking). Prefer stable identifiers
+   from the docs (Aktenzeichen, contract/customer/account numbers, invoice numbers, IBAN last
+   4, case refs) as the join key across folders and commits:
+
+   ```bash
+   git -C /path/to/documents log --all --grep='407631050' -i
+   git -C /path/to/documents log -S '407631050' -- '*.md'
+   ```
+
+5. **Answer** citing source **filenames** (provenance lines), not only the aggregate path.
+   If the folder has more source files than `sources:` lists, offer re-ingest.
+
+6. **Do not** use `.okf-llm-log.jsonl` to answer user questions about their documents.
+
+If no aggregate exists for a relevant folder yet, offer to ingest first.
 
 ## Change tracking
 
-The documents root is a git repository — commit after each ingest run so agents can diff what
-changed (`git -C /path/to/documents log --stat`, `git diff HEAD~1 -- '*.md'`). Use it to answer
-"what's new since last month" questions and to safely revert a bad aggregate or OCR pass.
+Documents root is a git repo. After each ingest, **commit** so history is the version timeline.
 
-**Remote / web agents:** same git history can push to a **private** remote (Gitea, GitLab, …)
-so agents without local NAS access read finished `.md` aggregates — not raw PDFs. Prefer
-Markdown-only remotes when privacy allows. Gitea is not an MCP server by itself; MCP is
-optional glue on a clone. Full write-up: [README — Remote access via git](README.md#remote-access-via-git).
+**git = ingest/version timeline; aggregates = current distilled truth.** No changelogs inside
+every `.md`. Case-event dates from the documents still live in the body as facts.
+
+### Commit messages MUST include unique identifiers
+
+When committing after ingest, put **stable IDs and short matter tags** in the commit subject/body
+so agents (and you) can find the same matter months later even across folders:
+
+```bash
+# Good — greppable IDs + folders touched
+git commit -m "Ingest 2026-07-18: EON 407631050, Rheinpower, coeo; providers+finances"
+
+# Weak — date only, no join keys
+git commit -m "Ingest: 2026-07-18"
+```
+
+Harvest IDs from the **new/changed aggregate sections** (and transcripts if needed): contract
+numbers, customer numbers, Aktenzeichen, invoice/case refs, meter IDs, etc. Same IDs should
+already appear in the Markdown bodies (extraction) so `rg` and `git log -S` both work.
+
+Batch uploads → one commit still correlates co-arrival; **IDs in the message** correlate the
+same matter across batches months apart (the other half of “two birds”).
+
+```bash
+git -C /path/to/documents log --stat
+git -C /path/to/documents diff HEAD~1 -- '*.md'
+git -C /path/to/documents log --grep='407631050' -i
+```
+
+Root-level “one matter” files (**R2**) only when the same case spans folders **and** neither
+batch commits nor shared IDs are enough.
+
+**Remote / web agents:** push to a **private** remote (Gitea, GitLab, …); they read `.md` +
+git history, not raw PDFs. MCP is optional glue on a clone. See
+[README — Remote access via git](README.md#remote-access-via-git).
 Do not put personal case details in this skill file when documenting examples.
 
 ## Ingest
