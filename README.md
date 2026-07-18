@@ -19,6 +19,7 @@ Ships as a [Claude Code / MCP-style agent skill](SKILL.md): install it once, and
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
 - [Quick start](#quick-start)
+- [Change tracking](#change-tracking)
 - [Configuration](#configuration)
 - [OKF output format](#okf-output-format)
 - [Development](#development)
@@ -68,7 +69,7 @@ Humans browse folders directly · agents query via ripgrep / this skill
 | Agent-led onboarding (checks deps, detects LLM backend, writes config) | ✅ |
 | Scheduled ingest (cron/systemd timer) — same CLI, no watcher process | ✅ |
 | Git-based change tracking of the document root | ✅ |
-| `index.md` generation, enrichment gate, derive/dream reasoning, FastAPI, MCP server | ⏳ Optional/later — see [Roadmap](#roadmap) |
+| Enrichment gate, derive/dream reasoning, FastAPI, MCP server | ⏳ Optional/later — see [Roadmap](#roadmap) |
 
 See [`docs/DESIGN.md`](docs/DESIGN.md) for the full system design, scope amendments, and why each optional piece was cut or deferred.
 
@@ -140,6 +141,26 @@ Same command for cron:
 ### 3. Ask questions through the skill
 
 Once symlinked, just ask your agent — it searches the whole document tree (never just one topically-named folder, since real questions cut across folders) and answers from the aggregates, citing the source document.
+
+## Change tracking
+
+The document root is a plain git repository — not for hosting or backup, just so agents (and
+you) can see what an ingest run actually changed:
+
+```bash
+cd /path/to/your/documents
+git init && git add -A && git commit -m "Initial snapshot"
+
+# after a later ingest run:
+git add -A && git commit -m "Ingest: $(date +%F)"
+git diff HEAD~1 -- '*.md'      # see exactly what the last ingest changed
+git log --stat                 # history of ingest runs over time
+```
+
+This is what makes re-ingest safe to run unattended: a synthesized summary that came out wrong,
+or an in-place PDF OCR pass that misbehaved, is a `git revert` away instead of a silent, unrecoverable
+overwrite. Add originals *and* generated `.md` aggregates to the same repo — diffing both together
+is the point.
 
 ## Configuration
 

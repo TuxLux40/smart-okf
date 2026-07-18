@@ -27,7 +27,6 @@ PDFs) would otherwise become as cluttered as the originals:
 
 ```
 documents/
-├── index.md              # planned (PR 2): directory listing, no frontmatter (see below)
 ├── contract.pdf
 ├── genealogy/
 │   ├── genealogy.md      # concept: aggregate of every supported file directly in genealogy/
@@ -127,6 +126,14 @@ under one or more headings, description pulled from each concept's frontmatter:
 * [Title 1](relative-url-1) - short description of item 1
 * [Title 2](relative-url-2) - short description of item 2
 ```
+
+**Superseded for smart-okf's own layout, not just deferred:** the spec's `index.md` exists to
+list a directory's concepts when each is its own file. smart-okf has exactly one concept per
+folder (the aggregate), which already carries the folder's `sources:` list and an orientation
+summary — a separate listing file would just restate what the aggregate already says. `index.md`
+generation is dropped from this project's roadmap for that reason (see `docs/DESIGN.md`'s
+scope amendments), not merely postponed. `index.md` stays reserved (§ above) regardless — a
+future feature that produces multiple concepts per folder would need it back.
 
 Not yet generated automatically — planned for PR 2 (`KBManager`).
 
