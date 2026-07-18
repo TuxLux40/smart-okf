@@ -45,6 +45,19 @@ tokenize differently), so exact token counting would need a specific tokenizer p
 LLM_LOG_FILENAME = ".okf-llm-log.jsonl"
 """Hidden root-level JSONL log of every LLM call: model, duration, retries, success."""
 
+SYNTHESIS_OKF_TYPE = "Synthesis"
+"""Frontmatter `type` for the root-level cross-folder dream synthesis document."""
+
+SYNTHESIS_FILENAME = "synthesis.md"
+"""Root-level output of the dream pass: matters, conflicts, patterns, open actions."""
+
+DREAM_SYNTHESIS_PROMPT_FILE = "dream_synthesis.md"
+DEFAULT_DREAM_SYNTHESIS_PROMPT = (
+    "You synthesize a digest of folder aggregates into one cross-folder report with exactly "
+    "these markdown sections: '## Matters', '## Conflicts', '## Patterns', '## Open actions'. "
+    "Cite aggregate paths for every claim; keep identifiers verbatim; body only, no frontmatter."
+)
+
 VISION_EXTRACTION_PROMPT_FILE = "vision_extraction.md"
 DEFAULT_VISION_EXTRACTION_PROMPT = (
     "Transcribe all legible text in this image verbatim, including handwriting and numbers. "

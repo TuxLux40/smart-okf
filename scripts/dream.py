@@ -1,0 +1,77 @@
+#!/usr/bin/env python
+"""Cross-folder "dream" synthesis pass — run after (or independently of) ingest.
+
+Reads every folder aggregate under the root and writes one `<root>/synthesis.md`
+(`type: Synthesis`): matters spanning folders, conflicts, patterns, open actions.
+Incremental: zero LLM calls when no aggregate changed since the last dream.
+
+Usage:
+    uv run python scripts/dream.py /path/to/documents
+    uv run python scripts/dream.py               # reads document_roots from smart-okf.yaml
+    uv run python scripts/dream.py --force       # re-dream even if nothing changed
+"""
+
+import argparse
+import sys
+from pathlib import Path
+
+from pydantic import ValidationError
+
+from app.config import SmartOkfConfig
+from app.constants import LLM_LOG_FILENAME
+from app.services.dream import dream
+from app.services.llm_client import LLMClient
+
+
+def _load_config() -> SmartOkfConfig | None:
+    """Load smart-okf.yaml if present and valid; None otherwise."""
+    try:
+        return SmartOkfConfig()  # type: ignore[call-arg]
+    except ValidationError:
+        return None
+
+
+def main() -> None:
+    """CLI entry point for the dream pass."""
+    parser = argparse.ArgumentParser(description="Synthesize matters/conflicts/patterns/actions across aggregates.")
+    parser.add_argument(
+        "folder",
+        nargs="?",
+        default=None,
+        help="Document root to dream over. Omit to use every document_roots entry from smart-okf.yaml.",
+    )
+    parser.add_argument("--host", default=None, help="OpenAI-compatible server URL (default: config/env)")
+    parser.add_argument("--model", default=None, help="Model name (default: config/env)")
+    parser.add_argument("--force", action="store_true", help="Re-dream even when no aggregate changed")
+    parser.add_argument("--quiet", action="store_true", help="Suppress progress output")
+    args = parser.parse_args()
+
+    config = _load_config()
+
+    folders: list[str]
+    if args.folder:
+        folders = [args.folder]
+    elif config is not None:
+        folders = [str(root) for root in config.document_roots]
+    else:
+        parser.error(
+            "no folder given and no valid smart-okf.yaml found; "
+            "pass a folder path or complete agent onboarding (see SKILL.md#onboarding-first-run)"
+        )
+        return
+
+    host: str | None = args.host or (config.llm_host if config is not None else None)
+    model: str | None = args.model or (config.llm_model if config is not None else None)
+
+    exit_code = 0
+    for folder in folders:
+        client = LLMClient(model=model, host=host, log_path=Path(folder) / LLM_LOG_FILENAME)
+        result = dream(folder, client=client, force=args.force, verbose=not args.quiet)
+        for error in result.errors:
+            print(f"Error: {error}", file=sys.stderr)
+        exit_code = max(exit_code, result.exit_code)
+    sys.exit(exit_code)
+
+
+if __name__ == "__main__":
+    main()

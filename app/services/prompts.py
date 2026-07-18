@@ -1,9 +1,11 @@
 """Prompt file loading helpers."""
 
 from app.constants import (
+    DEFAULT_DREAM_SYNTHESIS_PROMPT,
     DEFAULT_EXTRACTION_PROMPT,
     DEFAULT_FOLDER_SUMMARY_PROMPT,
     DEFAULT_VISION_EXTRACTION_PROMPT,
+    DREAM_SYNTHESIS_PROMPT_FILE,
     EXTRACTION_PROMPT_FILE,
     FOLDER_SUMMARY_PROMPT_FILE,
     PROMPTS_DIR,
@@ -32,3 +34,8 @@ def load_folder_summary_prompt() -> str:
 def load_vision_extraction_prompt() -> str:
     """Load the system prompt used to transcribe + describe images via a vision-capable model."""
     return load_prompt(VISION_EXTRACTION_PROMPT_FILE, fallback=DEFAULT_VISION_EXTRACTION_PROMPT)
+
+
+def load_dream_synthesis_prompt() -> str:
+    """Load the system prompt used by the dream pass to synthesize across folder aggregates."""
+    return load_prompt(DREAM_SYNTHESIS_PROMPT_FILE, fallback=DEFAULT_DREAM_SYNTHESIS_PROMPT)

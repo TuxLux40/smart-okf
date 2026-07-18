@@ -4,13 +4,21 @@ description: Ingest and query a local-first OKF knowledge base of personal docum
 ---
 # smart-okf — personal document knowledge base
 
-Local-first OKF (Open Knowledge Format) knowledge base. Each document folder gets **one
-aggregate markdown file** (`<folder>/<folder-name>.md`) summarizing every supported file directly
-inside it — non-recursive, subfolders get their own aggregate. Everything runs locally; documents
-never leave the machine.
+OKF (Open Knowledge Format) knowledge base for personal document folders. Each folder gets **one
+aggregate markdown file** (`<folder>/<folder-name>.md`) for every supported file directly inside
+it — non-recursive; subfolders get their own aggregate.
 
-Three operations: **onboarding** (first run only), **ingest** (build/refresh aggregates), and
-**query** (answer from aggregates).
+**Core purpose:**
+
+- **Aggregates = library of atomic facts** (IDs, date ranges, amounts, provenance)
+- **Synthesis (roadmap) = librarian** — same story across folders, conflicts, patterns, next steps
+- **Retrieval ladder (below) = how agents must use that library** — not one topical folder and hope
+
+Honcho-as-architecture is out; Honcho-as-inspiration for smarter passes over MDs is in. Extract
+runs via the ingest script (local or hosted model); query prefers MDs + transcripts + git.
+
+Three operations: **onboarding** (first run only), **ingest** (build/refresh the library), and
+**query** (retrieve from the library — and later, synthesized matter files).
 
 ## Onboarding (first run)
 
@@ -28,9 +36,12 @@ through it, don't dump all the questions at once.
   (`llm_host` / `llm_model`). Cron and interactive agent runs behave the same because
   extraction is always that second call inside `scripts/ingest_folder.py`.
 
-There is no "skip the local model; orchestrator extracts by hand" mode — the script has no
-callback into the live agent. Orchestrator and extractor can be different sizes/vendors; only
-the extractor must be local/LAN if privacy of raw documents matters.
+There is no "skip the script; orchestrator extracts every PDF by hand every time" mode — the
+script has no callback into the live agent, and cron needs the same engine. Orchestrator and
+extractor can be different models. **Privacy is a degree:** default is local/LAN extractor so
+raw OCR need not enter a cloud chat; with `allow_remote_llm` you may use a hosted extractor.
+At **query** time, prefer aggregates + transcripts + git even if the orchestrator is hosted —
+do not re-read every original PDF for facts that were already distilled.
 
 1. **Where tools install** — system CLIs (`rg`, `tesseract`, `gs`, `marker_single`) and the
    Python skill venv (`uv sync`) live on the **machine that runs ingest and hosts the
@@ -96,10 +107,14 @@ vector DB: it is **whole-tree ripgrep + read + git**, with an explicit fallback 
 
 | Step | Where | Use for |
 |------|--------|---------|
-| 1 | **Aggregates** (`**/*.md` with `type: FolderSummary`) | Distilled facts, tags, orientation summary, provenance — **always start here** |
+| 0 | **Synthesis** (`<root>/synthesis.md`, `type: Synthesis`) | Cross-folder matters, conflicts, patterns, open actions — check first for any question that could span folders; it names the aggregates to read next |
+| 1 | **Aggregates** (`**/*.md` with `type: FolderSummary`) | Distilled facts, tags, orientation summary, provenance — **always start here** for folder-level facts |
 | 2 | **Transcripts (mandatory fallback)** (`.okf-transcripts/`) | When MD is thin, partial, or missing a full ID/amount/quote — search here **before** re-ingest or guessing. Hidden folder; greppable; lossless raw extract |
 | 3 | **Git history** | “What’s new,” same-batch uploads, ID-tagged commits months later |
 | 4 | **JSONL** (`.okf-llm-log.jsonl`) | Ingest debugging only — **not** knowledge retrieval |
+
+Step 0 exists only after a dream pass has run (see **Dreaming** below); if `synthesis.md` is
+missing or older than recent ingests, offer to run it.
 
 **Transcripts are not optional polish.** Ingest always writes them so agents never need to re-OCR for exact strings. If step 1 does not fully answer the question, you **must** run step 2.
 
@@ -133,8 +148,8 @@ to prevent.
    4, case refs) as the join key across folders and commits:
 
    ```bash
-   git -C /path/to/documents log --all --grep='407631050' -i
-   git -C /path/to/documents log -S '407631050' -- '*.md'
+   git -C /path/to/documents log --all --grep='123456789' -i
+   git -C /path/to/documents log -S '123456789' -- '*.md'
    ```
 
 5. **Answer** citing source **filenames** (provenance lines), not only the aggregate path.
@@ -158,7 +173,7 @@ so agents (and you) can find the same matter months later even across folders:
 
 ```bash
 # Good — greppable IDs + folders touched
-git commit -m "Ingest 2026-07-18: EON 407631050, Rheinpower, coeo; providers+finances"
+git commit -m "Ingest 2026-07-18: ACME-Energy 123456789, TeleNet, InkassoCorp; providers+finances"
 
 # Weak — date only, no join keys
 git commit -m "Ingest: 2026-07-18"
@@ -174,7 +189,7 @@ same matter across batches months apart (the other half of “two birds”).
 ```bash
 git -C /path/to/documents log --stat
 git -C /path/to/documents diff HEAD~1 -- '*.md'
-git -C /path/to/documents log --grep='407631050' -i
+git -C /path/to/documents log --grep='123456789' -i
 ```
 
 Root-level “one matter” files (**R2**) only when the same case spans folders **and** neither
@@ -248,6 +263,33 @@ uv run python scripts/ingest_folder.py /path/to/documents
   ingest of a folder with scanned PDFs.
 - `index.md` and `log.md` are reserved OKF filenames; a folder literally named `index` or `log`
   is skipped rather than overwriting them.
+
+## Dreaming (cross-folder synthesis)
+
+The librarian pass. After ingest has built/refreshed aggregates, run:
+
+```bash
+cd /path/to/smart-okf
+uv run python scripts/dream.py /path/to/documents
+```
+
+- Reads a compact digest of **every** folder aggregate (identity, tags, orientation summary,
+  section headings — not full bodies) and writes one `<root>/synthesis.md`
+  (`type: Synthesis`) with exactly four sections: **Matters** (same real-world affair across
+  folders, joined by IDs), **Conflicts** (contradicting dates/amounts/statuses between
+  aggregates), **Patterns**, **Open actions**.
+- **Incremental like ingest**: aggregate hashes live in the synthesis frontmatter; when no
+  aggregate changed since the last dream, zero LLM calls. `--force` re-dreams anyway.
+- Uses the same extraction LLM (`--host`/`--model`/config). Large KBs are synthesized in
+  batches, then consolidated — transparent, no flag.
+- Run it after ingest runs (same cron, one line later) or on demand when the user asks a
+  cross-folder question and `synthesis.md` is stale/missing. Commit it with the ingest commit.
+- The synthesis cites aggregate paths — treat it as a **map**, not a source of truth: verify
+  facts in the cited aggregate (and its transcripts) before answering from it.
+
+```cron
+0 3 * * 0  cd /path/to/smart-okf && uv run python scripts/ingest_folder.py && uv run python scripts/dream.py
+```
 
 ## OpenWebUI integration
 

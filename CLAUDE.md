@@ -4,7 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-**smart-okf** — local-first OKF (Open Knowledge Format) knowledge base for sensitive documents, packaged as an agent skill (`SKILL.md` at repo root). Turns document folders into one aggregate Markdown file per folder (`providers/` → `providers/providers.md`, non-recursive) using any OpenAI-compatible LLM (LM Studio, llama.cpp, Ollama, vLLM), with no cloud calls required. No webapp, no daemons — agents invoke the skill, cron runs the same CLI.
+**smart-okf** — OKF knowledge base for personal documents, packaged as an agent skill (`SKILL.md`).
+**Core purpose:** aggregates = library of atomic facts; synthesis passes = librarian (same story,
+conflicts, next steps) inspired by Honcho *reasoning goals*, not Honcho infra; retrieval ladder in
+the skill is mandatory. Ingest turns folders into one aggregate MD per folder (non-recursive) via
+any OpenAI-compatible LLM (local default). No webapp/daemon — skill + cron CLI.
 
 Read [`AGENTS.md`](AGENTS.md) first — it has the module map, dev commands, and key conventions. This file adds Claude-specific notes on top.
 
@@ -41,10 +45,10 @@ Humans browse folders · agents query via the smart-okf skill + ripgrep
 
 - **OKF documents** (`app/models/okf.py`): `OKFFrontmatter` (Pydantic, `extra: allow`, required `type`, provenance via `source`) + `OKFDocument` (frontmatter + markdown body). `to_markdown`/`from_markdown` round-trip the `---` YAML frontmatter block; `add_link` appends to a `## Related` section in the body.
 - **Ingest pipeline** (`app/services/ingest.py`): walks a folder tree; per directory (non-recursive) extracts text from each supported file (`text_extraction.py` — pdfplumber plus in-place OCRmyPDF for scanned PDFs; `.docx`/`.eml`/`.csv`/`.xlsx` native; standalone images skipped), runs one LLM extraction per changed file (`llm_client.py`, any OpenAI-compatible server via `SMART_OKF_LLM_HOST`/`SMART_OKF_LLM_MODEL`), and merges results into one `FolderSummary` aggregate per folder. Incremental: `source_hashes` frontmatter (SHA-256 per source) lets unchanged files reuse their existing aggregate section without an LLM call; in-place OCR rewrites the PDF, so hashes are recomputed after extraction.
-- **Prompts** live in `prompts/*.md` and are loaded by `app/services/prompts.py`; `reasoning_derive.md`/`reasoning_dream.md` exist but are not yet wired into any pipeline (planned "Honcho-inspired" store → derive → dream → query loop).
+- **Prompts** live in `prompts/*.md`; `dream_synthesis.md` powers the shipped dream pass (`app/services/dream.py` + `scripts/dream.py` → root `synthesis.md`, `type: Synthesis`, hash-incremental). `reasoning_derive.md`/`reasoning_dream.md` remain as seeds for deeper R2 matter passes.
 - **`app/services/ports.py`** defines Protocols (e.g. `ReviewQueuePort`) for pieces not yet implemented — code against the protocol, not a concrete class, when building against planned Phase 1+ components.
 - **Immutability convention**: ingest defaults are applied via `apply_ingest_defaults()` + `model_copy` rather than mutating frontmatter in place.
-- Everything else (enrichment gate, derive/dream reasoning) is optional/later, not built — see the 2026-07-17/18 scope amendments at the top of `docs/DESIGN.md` before assuming a component exists. Remote (non-filesystem) agent access is **private git remote of aggregates** (Gitea/GitLab/…; roadmap R1 decided) — MCP only as optional glue on a clone, not a required smart-okf server. FastAPI specifically is cut; don't resurrect it, the watcher, per-file companions, or Streamlit either. `index.md` generation was dropped as redundant, not deferred — see `docs/OKF_SPEC.md`'s "Index files" section.
+- Everything else (enrichment gate, Honcho-style derive/dream) is optional/later or deprioritized — see `docs/DESIGN.md` and README roadmap before assuming a component exists. Remote agent access is **private git remote of aggregates** (R1 decided). FastAPI, watcher, per-file companions, Streamlit are cut. `index.md` generation was dropped as redundant — see `docs/OKF_SPEC.md`.
 
 ## Code style
 

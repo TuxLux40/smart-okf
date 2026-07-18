@@ -24,7 +24,12 @@ from app.constants import (
     DEFAULT_MAX_TOKENS,
 )
 from app.exceptions import LLMClientError
-from app.services.prompts import load_extraction_prompt, load_folder_summary_prompt, load_vision_extraction_prompt
+from app.services.prompts import (
+    load_dream_synthesis_prompt,
+    load_extraction_prompt,
+    load_folder_summary_prompt,
+    load_vision_extraction_prompt,
+)
 
 _MAX_ATTEMPTS = 3
 _RETRY_BACKOFF_SECONDS = 2.0
@@ -105,7 +110,7 @@ class LLMClient:
                 ],
             },
         ]
-        return self._complete(messages, self.vision_model, user_text)
+        return self._complete(messages, self.vision_model, user_text, payload_bytes=len(image_bytes))
 
     def _complete(
         self,
@@ -115,6 +120,7 @@ class LLMClient:
         *,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        payload_bytes: int | None = None,
     ) -> str:
         """Run a chat completion against `model` with retry/backoff and call logging."""
         started = time.monotonic()
@@ -128,14 +134,27 @@ class LLMClient:
                     max_tokens=max_tokens if max_tokens is not None else self.max_tokens,
                 )
                 content = (response.choices[0].message.content or "").strip()
-                self._log_call(model, log_prompt, attempt + 1, time.monotonic() - started, success=True)
+                self._log_call(
+                    model,
+                    log_prompt,
+                    attempt + 1,
+                    time.monotonic() - started,
+                    success=True,
+                    payload_bytes=payload_bytes,
+                )
                 return content
             except Exception as error:
                 last_error = error
                 if attempt < _MAX_ATTEMPTS - 1:
                     time.sleep(_RETRY_BACKOFF_SECONDS * (attempt + 1))
         self._log_call(
-            model, log_prompt, _MAX_ATTEMPTS, time.monotonic() - started, success=False, error=str(last_error)
+            model,
+            log_prompt,
+            _MAX_ATTEMPTS,
+            time.monotonic() - started,
+            success=False,
+            error=str(last_error),
+            payload_bytes=payload_bytes,
         )
         raise LLMClientError(
             f"LLM request failed for model {model} after {_MAX_ATTEMPTS} attempts: {last_error}"
@@ -150,11 +169,14 @@ class LLMClient:
         *,
         success: bool,
         error: str | None = None,
+        payload_bytes: int | None = None,
     ) -> None:
         """Append one JSONL record for this call's final outcome. No-op if log_path is unset.
 
         Logs the model actually used for this call (extraction vs vision), not only
-        `self.model`. Logging must never break ingestion — filesystem errors are swallowed.
+        `self.model`; `payload_bytes` records binary attachment size (images) that
+        `prompt_chars` can't see. Logging must never break ingestion — filesystem errors
+        are swallowed.
         """
         if self.log_path is None:
             return
@@ -163,6 +185,7 @@ class LLMClient:
             "model": model,
             "host": self.host,
             "prompt_chars": len(user_prompt),
+            "payload_bytes": payload_bytes,
             "duration_ms": round(duration_s * 1000),
             "attempts": attempts,
             "success": success,
@@ -183,3 +206,12 @@ class LLMClient:
         """Synthesize a short orientation summary (+ optional mermaid timeline) for a folder aggregate."""
         system_prompt = load_folder_summary_prompt()
         return self.chat(system_prompt, merged_sections)
+
+    def dream_synthesis(self, digest: str, *, max_tokens: int | None = None) -> str:
+        """Cross-folder "dream" pass: synthesize matters/conflicts/patterns/actions from aggregate digests.
+
+        Synthesis output is longer-form than per-document extraction, so callers may raise
+        `max_tokens` above the extraction default.
+        """
+        system_prompt = load_dream_synthesis_prompt()
+        return self.chat(system_prompt, digest, max_tokens=max_tokens)

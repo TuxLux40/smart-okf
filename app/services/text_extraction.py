@@ -52,10 +52,10 @@ def extract_text_from_file(
         return _extract_text_from_image(file_path)
     if suffix == ".pdf":
         if options.use_marker:
-            if not _marker_available():
+            if not marker_available():
                 raise DocumentIngestError("marker_single not found on PATH; install marker-pdf or pass --no-marker")
             return _extract_text_from_pdf_via_marker(file_path)
-        return _extract_text_from_pdf(file_path)
+        return _extract_text_from_pdf(file_path, allow_ocr_rewrite=options.allow_ocr_rewrite)
     if suffix == ".docx":
         return _extract_text_from_docx(file_path)
     if suffix == ".eml":
@@ -65,11 +65,19 @@ def extract_text_from_file(
     return file_path.read_text(encoding=TEXT_FILE_ENCODING, errors="ignore")
 
 
-def _extract_text_from_pdf(file_path: Path) -> str:
-    """Extract plain text from a PDF; OCR scanned PDFs in place first."""
+def _extract_text_from_pdf(file_path: Path, *, allow_ocr_rewrite: bool = True) -> str:
+    """Extract plain text from a PDF; OCR scanned PDFs in place first (when permitted).
+
+    With `allow_ocr_rewrite=False` (read-only paths like transcript backfill), a scanned
+    PDF raises instead of being silently mutated — the caller treats it as best-effort.
+    """
     text = _read_pdf_text(file_path)
     if text.strip():
         return text
+    if not allow_ocr_rewrite:
+        raise DocumentIngestError(
+            f"scanned PDF {file_path} needs OCR, but this pass is read-only (no in-place rewrite)"
+        )
     ocr_pdf_in_place(file_path)
     return _read_pdf_text(file_path)
 
@@ -110,8 +118,12 @@ def ocr_pdf_in_place(file_path: Path) -> None:
         raise DocumentIngestError(f"OCR failed for {file_path}") from error
 
 
-def _marker_available() -> bool:
-    """Whether a separately-installed `marker_single` binary is on PATH."""
+def marker_available() -> bool:
+    """Whether a separately-installed `marker_single` binary is on PATH.
+
+    Public so CLI entry points can preflight once and fail fast with a single clear
+    error, instead of every PDF being individually skipped in a "successful" run.
+    """
     return shutil.which("marker_single") is not None
 
 

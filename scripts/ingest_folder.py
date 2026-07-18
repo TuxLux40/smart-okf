@@ -22,6 +22,7 @@ from app.constants import LLM_LOG_FILENAME
 from app.services.extraction_options import ExtractionOptions
 from app.services.ingest import IngestFolderResult, ingest_folder
 from app.services.llm_client import LLMClient
+from app.services.text_extraction import marker_available
 
 
 def _load_config() -> SmartOkfConfig | None:
@@ -83,6 +84,12 @@ def main() -> None:
     model: str | None = args.model or (config.llm_model if config is not None else None)
     vision_model: str | None = args.vision_model or (config.vision_model if config is not None else None)
     use_marker = not args.no_marker and (config.use_marker if config is not None else True)
+    if use_marker and not marker_available():
+        parser.error(
+            "marker_single not found on PATH but marker extraction is enabled (default). "
+            "Install it (pipx install marker-pdf) or pass --no-marker for pdfplumber/OCRmyPDF only."
+        )
+        return
     options = ExtractionOptions(use_marker=use_marker)
 
     combined = IngestFolderResult(root=Path(folders[0]))
@@ -92,12 +99,17 @@ def main() -> None:
         combined.written_paths.extend(result.written_paths)
         combined.unchanged_dirs.extend(result.unchanged_dirs)
         combined.skipped.extend(result.skipped)
+        combined.removed_paths.extend(result.removed_paths)
 
     if combined.skipped and not args.quiet:
         print(f"\n{len(combined.skipped)} file(s)/folder(s) skipped:")
         for path, reason in combined.skipped:
             print(f"  {path}: {reason}")
-    sys.exit(0 if all(Path(f).is_dir() for f in folders) else 1)
+
+    # 1 = bad root(s), 2 = partial (skips) so cron goes red instead of silently green, 0 = clean.
+    if not all(Path(f).is_dir() for f in folders):
+        sys.exit(1)
+    sys.exit(2 if combined.skipped else 0)
 
 
 if __name__ == "__main__":

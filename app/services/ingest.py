@@ -42,12 +42,19 @@ class IngestFolderResult:
     written_paths: list[Path] = field(default_factory=list)
     unchanged_dirs: list[Path] = field(default_factory=list)
     skipped: list[tuple[Path, str]] = field(default_factory=list)
+    removed_paths: list[Path] = field(default_factory=list)
 
     @property
     def exit_code(self) -> int:
-        """Return a process exit code for CLI callers."""
+        """Process exit code for CLI callers: 1 bad root, 2 partial (skips), 0 clean.
+
+        Nonzero on skips so cron/scheduled runs go red instead of silently "green"
+        while files fail to ingest.
+        """
         if not self.root.is_dir():
             return 1
+        if self.skipped:
+            return 2
         return 0
 
 
@@ -247,6 +254,42 @@ def ingest_folder(
     return result
 
 
+def _backfill_transcript(file_path: Path, root: Path, client: LLMClient) -> None:
+    """Write a missing transcript for an already-ingested file, best-effort and read-only.
+
+    Uses LIGHT_EXTRACTION: never shells into marker, never OCR-rewrites a scanned PDF —
+    a pass over an unchanged folder must not mutate its files or cold-start heavy tools.
+    Images are skipped when a vision model is configured: a tesseract-only transcript
+    would contradict the vision-derived aggregate section, and the vision call is not
+    "cheap backfill" territory — the transcript reappears on the next real re-ingest.
+    """
+    if file_path.suffix.lower() in IMAGE_DOCUMENT_SUFFIXES and client.vision_model is not None:
+        return
+    if transcript_path(file_path, root).exists():
+        return
+    with contextlib.suppress(DocumentIngestError):
+        write_transcript(file_path, root, extract_text_from_file(file_path, LIGHT_EXTRACTION))
+
+
+def _remove_orphan_aggregate(directory: Path, result: IngestFolderResult, *, verbose: bool) -> None:
+    """Delete a stale aggregate left behind after a folder's last supported file was removed.
+
+    Only deletes files that are verifiably our own output (`type: FolderSummary`
+    frontmatter) — a hand-written markdown file that happens to share the folder's
+    name is never touched. Reserved names are never aggregates, so nothing to do there.
+    """
+    summary_path = folder_summary_path(directory)
+    if summary_path.name in RESERVED_CONCEPT_FILENAMES or not summary_path.is_file():
+        return
+    existing = load_existing_summary(summary_path)
+    if existing is None or existing.frontmatter.type != FOLDER_SUMMARY_OKF_TYPE:
+        return
+    summary_path.unlink()
+    result.removed_paths.append(summary_path)
+    if verbose:
+        print(f"  -> Removed orphan aggregate {summary_path} (no supported files left)")
+
+
 def _ingest_directory(
     directory: Path,
     root: Path,
@@ -259,6 +302,7 @@ def _ingest_directory(
     """Ingest the files directly inside one directory (non-recursive) into its aggregate."""
     files = sorted(f for f in directory.iterdir() if f.is_file() and is_supported_document(f))
     if not files:
+        _remove_orphan_aggregate(directory, result, verbose=verbose)
         return
 
     summary_path = folder_summary_path(directory)
@@ -276,10 +320,7 @@ def _ingest_directory(
     if existing is not None and current_hashes == old_hashes:
         result.unchanged_dirs.append(directory)
         for file_path in files:
-            if not transcript_path(file_path, root).exists():
-                with contextlib.suppress(DocumentIngestError):
-                    # Backfill is best-effort and must stay cheap: never shell into marker.
-                    write_transcript(file_path, root, extract_text_from_file(file_path, LIGHT_EXTRACTION))
+            _backfill_transcript(file_path, root, client)
         if verbose:
             print(f"Unchanged: {directory}")
         return
@@ -294,18 +335,24 @@ def _ingest_directory(
         if reusable and file_path.name in old_sections:
             sections.append(old_sections[file_path.name])
             ingested_files.append(file_path)
-            if not transcript_path(file_path, root).exists():
-                with contextlib.suppress(DocumentIngestError):
-                    write_transcript(file_path, root, extract_text_from_file(file_path, LIGHT_EXTRACTION))
+            _backfill_transcript(file_path, root, client)
             continue
 
         if verbose:
             print(f"Processing: {file_path}")
         try:
             document = extract_document(file_path, root, client, options=options)
-        except (DocumentIngestError, LLMClientError) as error:
+        except Exception as error:  # noqa: BLE001 — one corrupt file must never abort the whole run
             result.skipped.append((file_path, str(error)))
-            current_hashes.pop(file_path.name, None)
+            if file_path.name in old_sections and file_path.name in old_hashes:
+                # The file changed but re-extraction failed: keep the previous (stale)
+                # section and its old hash so the aggregate doesn't silently lose the
+                # document — the hash mismatch makes the next run retry extraction.
+                sections.append(old_sections[file_path.name])
+                ingested_files.append(file_path)
+                current_hashes[file_path.name] = old_hashes[file_path.name]
+            else:
+                current_hashes.pop(file_path.name, None)
             if verbose:
                 print(f"  Skipped {file_path}: {error}")
             continue

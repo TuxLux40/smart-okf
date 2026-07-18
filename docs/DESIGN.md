@@ -44,6 +44,23 @@ everything below:
   source of truth; SQLite is auxiliary (job dedup, review-queue persistence). Not needed until/if
   the optional pieces above are built.
 
+### 2026-07-19 Priority amendment — core purpose locked
+
+**Canonical purpose (user-confirmed wording):**
+
+> Aggregates = library of atomic facts.  
+> Synthesis = librarian that notices the same story, fights, and next steps.  
+> Honcho-as-architecture is out. Honcho-as-inspiration for smarter passes over MDs is in.
+
+- **Folder aggregates = write-time compile** (facts, IDs, date ranges, provenance, folder
+  orientation). Necessary; not the ceiling.
+- **Honcho product stack** superseded; **derive/dream *goals*** ship as R2 / R2b matter +
+  synthesis passes (`prompts/reasoning_*.md` as seeds).
+- **Retrieval ladder** is how agents use the library (mandatory skill contract).
+- **Investment order:** retrieval quality → automated re-ingest → matter/synthesis reasoning.
+- **Privacy spectrum:** local extract default; hosted extract optional; query prefers MD.
+- Positioning vs LLM-wiki/OKF: automate personal-folder ingest + retrieval + synthesis path.
+
 ### 2026-07-18 Roadmap: hardening + follow-ups
 
 Shipped since the amendment above (first live ingest run surfaced real gaps): image OCR via
@@ -288,6 +305,53 @@ onboarding/config/flag, never auto-detected.
 identifying detail, exactly as designed. Note: `qwen3-vl-8b-instruct` crashed LM Studio's Vulkan
 backend (`vk::Queue::submit: ErrorDeviceLost`, likely VRAM pressure on the 8GB RX 7600) on the
 first attempt — a local GPU/driver issue, not a smart-okf bug; the 2B model worked without issue.
+
+### 2026-07-19: fable review fixes (8 findings) + dream synthesis pass shipped (R2b v1)
+
+A second-model review pass (fable, per `docs/HANDOFF_FOR_CLAUDE.md`) confirmed all handoff
+claims against the code and produced 8 findings, all fixed the same day:
+
+1. **Privacy (blocking):** SKILL.md/README.md example commit messages contained a real
+   contract number and real counterparties — replaced with fictional IDs (`ACME-Energy
+   123456789`, `TeleNet`, `InkassoCorp`). Rule reaffirmed: nothing case-real in published files.
+2. **Robustness:** `_ingest_directory` now catches `Exception` per file (was only
+   `DocumentIngestError`/`LLMClientError`) — a malformed PDF (raw `PdfminerException`,
+   observed live), unreadable image (`OSError` from the vision path), or corrupt docx no
+   longer aborts the entire run; the file is skipped and reported.
+3. **Exit codes + preflight:** `IngestFolderResult.exit_code` is now real (0 clean / 1 bad
+   root / 2 partial-with-skips) and `scripts/ingest_folder.py` uses it, so cron goes red
+   instead of silently green when files fail. The CLI also preflights `marker_single` once
+   at startup (clear single error) instead of N per-file skips.
+4. **Read-only backfill:** `ExtractionOptions.allow_ocr_rewrite` (False in
+   `LIGHT_EXTRACTION`) — transcript backfill can no longer OCR-rewrite a scanned PDF in
+   place during an "unchanged" pass; it raises and the backfill skips, instead of mutating
+   originals and invalidating hashes.
+5. **Orphan aggregates:** deleting a folder's last supported file now deletes its stale
+   aggregate on the next run (`_remove_orphan_aggregate`, reported via
+   `IngestFolderResult.removed_paths`). Only files with `type: FolderSummary` frontmatter
+   are ever deleted — hand-written markdown sharing the folder name is untouchable.
+6. **No silent section loss:** when a changed file's re-extraction fails, its previous
+   section and old hash are retained (stale but present); the hash mismatch retries next
+   run. Previously the section silently vanished until extraction succeeded.
+7. **Vision observability:** JSONL log records `payload_bytes` (image size) — previously a
+   3MB vision request logged as ~20 `prompt_chars`.
+8. **Transcript consistency:** backfill skips images when a vision model is configured — no
+   more tesseract transcripts contradicting vision-derived sections.
+
+**Dream pass (R2b v1) shipped** — the librarian, per the locked core purpose. Filesystem-native,
+Honcho-in-shape-only: `app/services/dream.py` + `scripts/dream.py` collect every
+`type: FolderSummary` aggregate, build a compact per-aggregate digest (identity, tags,
+orientation summary, section headings + `_Source:` lines — never full bodies), and make one
+LLM call (`prompts/dream_synthesis.md`) producing `<root>/synthesis.md` (`type: Synthesis`)
+with exactly four sections: Matters (cross-folder, join IDs verbatim), Conflicts, Patterns,
+Open actions — every claim citing aggregate paths. Hash-incremental exactly like ingest:
+synthesis frontmatter stores a SHA-256 per source aggregate; zero LLM calls when nothing
+changed; `--force` overrides. Oversized digests are batched under `CHUNK_CHAR_THRESHOLD` and
+consolidated with one final merge call. Retrieval ladder gains step 0: synthesis is the map,
+aggregates/transcripts remain the truth — SKILL.md instructs agents to verify cited
+aggregates before answering from the synthesis. Explicitly not built: queues, Postgres,
+pgvector, idle-timers, peers — cron/on-demand invocation replaces all of them. Per-matter
+concept files (R2 proper) stay on the roadmap for when one synthesis file isn't enough.
 
 ---
 

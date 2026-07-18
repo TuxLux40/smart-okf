@@ -5,16 +5,43 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 [![OKF v0.1](https://img.shields.io/badge/OKF-v0.1-informational.svg)](docs/OKF_SPEC.md)
 
-**Local-first [OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) knowledge base** for sensitive personal documents. Point it at a folder tree — health, insurance, government mail, provider contracts — and a local LLM turns each folder into one greppable Markdown aggregate. Originals never leave your machine and never move into a proprietary DB.
+**[OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) knowledge base for personal document folders** — health, insurance, government mail, provider contracts.
 
-**The point of this repo is not “OCR for its own sake.”** It is that **agents retrieve correctly**: whole-tree search, distilled facts first, raw text as fallback, git for time and matter-linking — not “open the finances folder and hope.” That retrieval contract lives in [`SKILL.md`](SKILL.md) and is mandatory for any agent using this skill.
+### Core goal and purpose
+
+| Layer | Role |
+|-------|------|
+| **Aggregates** | **Library of atomic facts** — IDs, date ranges, amounts, parties, provenance, greppable per folder |
+| **Synthesis** | **Librarian** — notices the same story across docs/folders, conflicts (“fights”), patterns, and next steps |
+| **Retrieval ladder** | Agents actually *use* that library (whole tree → MD → transcripts → git), not “open one topical folder and hope” |
+
+**Honcho-as-architecture is out. Honcho-as-inspiration for smarter passes over your MDs is in.** We are not porting Honcho’s stack (queues, peers, Postgres). We *are* aiming at the same class of outcome: compile once, then keep reasoning over the compiled knowledge so agents stop re-deriving form-critical facts from raw PDFs every time.
+
+OCR and extraction are means. **Pre-distilled facts + cross-matter synthesis + mandatory agent retrieval** is the product.
 
 Ships as a [Claude Code agent skill](SKILL.md): no server, no daemon, no webapp. Web agents without your NAS consume finished Markdown via a [private git remote](#remote-access-via-git).
+
+### What we add on top of LLM-wiki / OKF
+
+Pre-distilling knowledge into markdown is **not unique** — [Karpathy’s LLM wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) and OKF already describe that. smart-okf productizes a hard vertical:
+
+| Contribution | Why it matters |
+|--------------|----------------|
+| **Pipeline from a real filesystem tree** | PDF/scan/docx/eml/xlsx → OCR/marker → LLM → OKF section, **unattended** (cron/CLI) — not only “drop one article into raw/ and chat” |
+| **Orchestrator vs extractor (degree of privacy)** | Script always runs extraction so cron = interactive. **Default:** local/LAN extractor so raw docs need not enter a cloud chat. **Optional:** point `SMART_OKF_LLM_HOST` at a hosted model (`allow_remote_llm`) if you accept that tradeoff. Query-time agents (local *or* hosted) should still answer from **MDs + transcripts + git**, not re-read every PDF |
+| **Folder aggregates + hash-incremental re-ingest** | Practical for hundreds of personal files; cheap re-runs |
+| **Transcripts as mandatory retrieval fallback** | Exact periods, IDs, quotes when the aggregate is thin |
+| **Skill = retrieval ladder** | Whole-tree `rg` → MD → transcripts → git+IDs — the product, not “we have markdown” |
+| **Git as version timeline + ID-bearing commits** | Ops for life archives and matter linking over months |
+
+**Library vs librarian:** aggregates cover write-time extraction (the library). **Synthesis passes** (matter linking, conflicts, patterns, actions — R2 / R2b) are the librarian. Both are core purpose; only Honcho’s *infra* is out. See [Roadmap](#roadmap).
 
 ---
 
 ## Contents
 
+- [Core goal and purpose](#core-goal-and-purpose)
+- [What we add on top of LLM-wiki / OKF](#what-we-add-on-top-of-llm-wiki--okf)
 - [Core concepts](#core-concepts)
   - [Why this exists: the retrieval ladder](#why-this-exists-the-retrieval-ladder)
   - [OKF in one paragraph](#okf-in-one-paragraph)
@@ -51,6 +78,7 @@ Personal life does not fit one folder name. A benefits form, a utility dispute, 
 
 | Step | Layer | Path / tool | Use for |
 |------|--------|-------------|---------|
+| 0 | **Synthesis (the librarian)** | `<root>/synthesis.md`, `type: Synthesis` | Cross-folder matters, conflicts, patterns, open actions — the map naming which aggregates to read |
 | 1 | **Aggregates** | `**/*.md` with `type: FolderSummary` | Distilled facts, tags, orientation summary, provenance |
 | 2 | **Transcripts (fallback)** | `.okf-transcripts/<relpath>.txt` | Exact wording, full reference numbers, quotes when the MD is thin or incomplete |
 | 3 | **Git history** | `git log`, `--grep`, `-S` | What’s new, same-batch uploads, same matter months later via IDs in messages |
@@ -71,12 +99,20 @@ Without that ladder written into the skill, agents will not invent it reliably. 
 
 ### Orchestrator vs extractor
 
-| Role | Who | Job | Sees raw PDFs? |
-|------|-----|-----|----------------|
-| **Orchestrator** | Claude Code, Hermes, OpenWebUI automation, cron, you | When to ingest; how to **retrieve** and answer (`SKILL.md` + `rg` + git) | **No** |
-| **Extractor** | Local model (`SMART_OKF_LLM_HOST` / `MODEL`) | Structure text → OKF **inside** `scripts/ingest_folder.py` | **Yes**, only on your machine |
+| Role | Who | Job | Touch raw document bytes? |
+|------|-----|-----|---------------------------|
+| **Orchestrator** | Claude Code, Hermes, OpenWebUI automation, cron, you | When to ingest; how to **retrieve** and answer (`SKILL.md` + `rg` + git) | Prefer **no** — answer from MD/transcripts/git |
+| **Extractor** | Model behind `SMART_OKF_LLM_HOST` / `MODEL` (local *or* hosted) | Structure text → OKF **inside** `scripts/ingest_folder.py` | **Yes**, during ingest only |
 
-There is no mode where the chat agent *is* the extractor. The script is a subprocess. That keeps raw document text off cloud orchestrators and makes cron behave like interactive runs.
+The script is a subprocess so **cron and interactive runs share one engine**. That is the hard requirement.
+
+**Privacy is a spectrum, not a dogma:**
+
+- **Strict (default):** local/LAN extractor + allowlist — raw OCR never needs a cloud chat session.
+- **Relaxed:** hosted extractor via `allow_remote_llm` if you prefer quality/convenience and accept sending extract text off-box.
+- **Query time:** even a fully hosted orchestrator (Claude web on a private git clone of `.md`s) should use the **retrieval ladder on aggregates**, not re-ingest PDFs. Hosted vs local mainly changes *who runs extraction*, not *where answers should come from* after ingest.
+
+There is still no supported mode of “skip the script; the chat agent manually OCRs every file every time” — that loses incremental hashes, transcripts, and identical cron behavior.
 
 ### Git vs Markdown
 
@@ -89,13 +125,13 @@ There is no mode where the chat agent *is* the extractor. The script is a subpro
 
 ### Why a script (not pure agent inference)
 
-| Need | Pure agent on PDFs | Script |
-|------|-------------------|--------|
-| Privacy of raw docs | Bytes enter cloud context | Extractor stays local |
+| Need | Pure agent on PDFs every time | Script |
+|------|------------------------------|--------|
 | Unattended re-ingest | No agent online | Cron runs the same CLI |
 | Incremental skip | Easy to re-do everything | `source_hashes` |
-| OCR / marker / transcripts / heading rules | Re-prompt fragile | Implemented once |
+| OCR / marker / transcripts / headings | Re-prompt fragile | Implemented once |
 | Same result for every orchestrator | Each agent reinvents | One contract |
+| Optional privacy of raw extract | Bytes may enter chat context | You choose local vs hosted extractor |
 
 The skill teaches **retrieval + when to run the engine**. The script *is* the engine.
 
@@ -107,7 +143,7 @@ The skill teaches **retrieval + when to run the engine**. The script *is* the en
 
 ```mermaid
 flowchart TB
-  subgraph orchestrators["Orchestrators — when / what · never raw PDFs"]
+  subgraph orchestrators["Orchestrators — when / what · prefer MD not PDFs"]
     Agent["Agent + SKILL.md"]
     Cron["Cron / systemd"]
     Human["You"]
@@ -127,9 +163,9 @@ flowchart TB
     Config["smart-okf.yaml / env"]
   end
 
-  subgraph local_machine["Machine with model + tools"]
+  subgraph local_machine["Ingest host (tools + extractor endpoint)"]
     ExtTools["marker_single · tesseract · gs · rg"]
-    Extractor["Local extractor LLM"]
+    Extractor["Extractor LLM local or hosted"]
   end
 
   subgraph docs["Document root"]
@@ -211,7 +247,7 @@ If folders grow huge and `rg` alone feels weak, *then* evaluate BM25 or hybrid s
 | **[Paperless-ngx](https://docs.paperless-ngx.com/)** | Mature OCR + search + correspondents | Docs live in its DB; no LLM-distilled greppable OKF facts next to files |
 | **OpenWebUI RAG** | Chat with PDFs, zero structure | No portable structured facts, weak provenance, no agent retrieval contract |
 
-smart-okf’s differentiator: **structured facts in plain Markdown beside originals** + **explicit agent retrieval ladder** + **git as timeline** — no required cloud, no required DB.
+smart-okf’s differentiator: **automated pipeline on a personal folder tree** + **explicit agent retrieval ladder** + **git as timeline** + optional local-first extraction — not “we invented markdown knowledge.” See [What we add on top of LLM-wiki / OKF](#what-we-add-on-top-of-llm-wiki--okf).
 
 ---
 
@@ -231,7 +267,8 @@ smart-okf’s differentiator: **structured facts in plain Markdown beside origin
 | Git timeline + ID-bearing commits | ✅ Convention |
 | Private git remote for web agents | ✅ Decision (R1) |
 | JSONL LLM call log (ops, not knowledge) | ✅ |
-| Cross-folder auto “matter” files | ⏳ R2 if needed |
+| **Dream pass** (`scripts/dream.py`): cross-folder matters, conflicts, patterns, open actions → `synthesis.md` | ✅ Hash-incremental (R2b) |
+| Cross-folder auto “matter” files (per-matter concepts) | ⏳ R2 if the synthesis alone isn’t enough |
 | Vector RAG / BM25 service | ❌ Not planned as default — see [What this is not](#what-this-is-not) |
 
 ---
@@ -307,9 +344,9 @@ After each ingest, commit the document root. **Commit messages must include stab
 
 ```bash
 git add -A
-git commit -m "Ingest 2026-07-18: EON 407631050, Rheinpower; providers+finances"
-git log --grep='407631050' -i
-git log -S '407631050' -- '*.md'
+git commit -m "Ingest 2026-07-18: ACME-Energy 123456789, TeleNet; providers+finances"
+git log --grep='123456789' -i
+git log -S '123456789' -- '*.md'
 ```
 
 See [Git vs Markdown](#git-vs-markdown). Bad OCR/summary → `git revert`, not silent loss.
@@ -415,12 +452,29 @@ docs/HANDOFF_FOR_CLAUDE.md
 
 ## Roadmap
 
-- **R1** — Private git remote: **decided** (ops examples only)
-- **R2** — Cross-folder matter files when IDs + git batches aren’t enough
-- **R3** — Extraction verbosity valve  
-- **R4** — Semantic near-duplicates  
-- **R5** — Cron install/list/remove helpers  
-- **R6** — Docling as optional backend (evaluated, not adopted)
+**Priority shift (2026-07-19):** Keep **all** useful reasoning. What is superseded is **Honcho’s infrastructure and naming**, not the *goals* of background synthesis.
+
+| Layer | What it does | Status |
+|-------|----------------|--------|
+| **Extract → aggregate** (shipped) | Facts, IDs, periods, provenance, per-folder summary | Solid; keep hardening (esp. date ranges) |
+| **Retrieval ladder** (shipped as skill) | Whole-tree use of that distilled layer | Core product; invest more |
+| **Re-ingest automation** | Cheap, reliable updates when files change | Invest more |
+| **Matter / synthesis passes** (ex–derive/dream *goals*) | Cross-doc/folder: same matter, conflicts, patterns, suggested links/actions | **v1 shipped** — `scripts/dream.py` → root `synthesis.md` (R2b); per-matter concept files stay R2 |
+
+| ID | Focus | Status / notes |
+|----|--------|----------------|
+| **R1** | Private git remote for web agents | **Decided** — ops examples only |
+| **R-ret** | Retrieval pipeline | Ladder + helpers; agents must use pre-distilled MDs |
+| **R-ingest** | Automated re-ingestion | Cron, change detection, ID-bearing commits |
+| **R2** | Cross-doc / cross-folder **matter** recognition | Explicit matter concepts / link pass when IDs+batches aren’t enough |
+| **R2b** | **Synthesis / “dream-class” reasoning** | **Shipped v1**: `scripts/dream.py` digests every aggregate → one root `synthesis.md` (`type: Synthesis`) with Matters/Conflicts/Patterns/Open actions, cited aggregate paths, hash-incremental (zero LLM calls when nothing changed), batched+consolidated on large KBs. Not Honcho Postgres/queue/peers |
+| **R3** | Extraction verbosity valve | Tunable detail |
+| **R4** | Semantic near-duplicates | Look-alike letters |
+| **R5** | Cron install/list/remove helpers | Ops UX |
+| **R6** | Docling optional backend | Evaluated, not adopted |
+| **R-geo** | Genealogy **addon** profile | Optional — not a rebrand |
+| **R-mkt** | Marketing / virality concept | Strategy + sample demo |
+| ~~Honcho as product~~ | Port Honcho derive/dream *stack* | **Superseded** — same *reasoning aims* live under R2 / R2b |
 
 History and cut scope: [`docs/DESIGN.md`](docs/DESIGN.md).
 
@@ -428,13 +482,15 @@ History and cut scope: [`docs/DESIGN.md`](docs/DESIGN.md).
 
 ## Core principles
 
-1. **Retrieval ladder is the product** — agents must be told explicitly; whole tree → aggregates → **transcripts as fallback** → git; never JSONL for answers.  
-2. **Privacy & local extraction** — raw PDFs stay off cloud orchestrators.  
-3. **Files stay yours** — no proprietary document DB.  
-4. **Git = timeline; MD = current truth** — IDs in bodies and commit messages.  
-5. **OKF native** — portable Markdown + frontmatter.  
-6. **Script = extractor; skill = retrieval + control plane.**  
-7. **Bring your own local LLM** for extraction.
+1. **Library + librarian** — aggregates = atomic facts; synthesis = same story, fights, next steps. Honcho inspires the *passes*, not a product fork.  
+2. **Retrieval ladder is mandatory** — whole tree → aggregates → **transcripts as fallback** → git; never JSONL for document answers.  
+3. **Compile then synthesize** — extract is not the ceiling of reasoning.  
+4. **Privacy is a degree** — default local/LAN extract; hosted extract optional; query prefers MD.  
+5. **Files stay yours** — no proprietary document DB.  
+6. **Git = timeline; MD = current truth** — IDs in bodies and commit messages.  
+7. **OKF native** — portable Markdown + frontmatter, automated for personal trees.  
+8. **Script = extractor; skill = retrieval + control plane.**  
+9. **Bring your own LLM** for extraction (local preferred, remote optional).
 
 ---
 

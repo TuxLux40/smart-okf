@@ -148,3 +148,22 @@ def test_use_marker_true_uses_marker_output_when_binary_present(
     text = extract_text_from_file(pdf_path, ExtractionOptions(use_marker=True))
 
     assert "Extracted table content." in text
+
+
+def test_read_only_extraction_never_ocr_rewrites_scanned_pdf(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """LIGHT_EXTRACTION (transcript backfill) must raise on a scanned PDF, not mutate it."""
+    from app.services import text_extraction
+    from app.services.extraction_options import LIGHT_EXTRACTION
+
+    monkeypatch.setattr(text_extraction, "_read_pdf_text", lambda _path: "")
+
+    def _must_not_be_called(_path: Path) -> None:
+        raise AssertionError("ocr_pdf_in_place must not run in a read-only pass")
+
+    monkeypatch.setattr(text_extraction, "ocr_pdf_in_place", _must_not_be_called)
+
+    pdf_path = tmp_path / "scan.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%%EOF")
+
+    with pytest.raises(DocumentIngestError, match="read-only"):
+        extract_text_from_file(pdf_path, LIGHT_EXTRACTION)

@@ -296,3 +296,113 @@ def test_image_falls_back_to_tesseract_when_no_vision_model(tmp_path: Path, monk
     assert result.written_paths == [tmp_path / f"{tmp_path.name}.md"]
     aggregate = (tmp_path / f"{tmp_path.name}.md").read_text(encoding="utf-8")
     assert "tesseract OCR output" in aggregate
+
+
+def test_orphan_aggregate_removed_when_folder_emptied(tmp_path: Path) -> None:
+    (tmp_path / "doc.txt").write_text("content", encoding="utf-8")
+    ingest_folder(str(tmp_path), client=_StubLLMClient())  # type: ignore[arg-type]
+    aggregate_path = tmp_path / f"{tmp_path.name}.md"
+    assert aggregate_path.is_file()
+
+    (tmp_path / "doc.txt").unlink()
+    result = ingest_folder(str(tmp_path), client=_StubLLMClient())  # type: ignore[arg-type]
+
+    assert not aggregate_path.exists()
+    assert result.removed_paths == [aggregate_path]
+
+
+def test_hand_written_markdown_sharing_folder_name_is_never_deleted(tmp_path: Path) -> None:
+    # Not our output: no FolderSummary frontmatter. Folder has no supported files.
+    hand_written = tmp_path / f"{tmp_path.name}.md"
+    hand_written.write_text("# My own notes\n\nDo not touch.", encoding="utf-8")
+
+    result = ingest_folder(str(tmp_path), client=_StubLLMClient())  # type: ignore[arg-type]
+
+    assert hand_written.is_file()
+    assert result.removed_paths == []
+
+
+def test_failed_reextraction_keeps_previous_section_and_retries_next_run(tmp_path: Path) -> None:
+    (tmp_path / "doc.txt").write_text("version one", encoding="utf-8")
+    ingest_folder(str(tmp_path), client=_StubLLMClient())  # type: ignore[arg-type]
+    aggregate_path = tmp_path / f"{tmp_path.name}.md"
+    assert "version one" in aggregate_path.read_text(encoding="utf-8")
+
+    class _FailingClient:
+        def extract_structured(self, raw_text: str, context: str = "") -> str:
+            raise RuntimeError("LLM down")
+
+        def summarize_sections(self, merged_sections: str) -> str:
+            return ""
+
+    (tmp_path / "doc.txt").write_text("version two", encoding="utf-8")
+    result = ingest_folder(str(tmp_path), client=_FailingClient())  # type: ignore[arg-type]
+
+    # Old section survives; skip is recorded; next run still sees a hash mismatch.
+    text = aggregate_path.read_text(encoding="utf-8")
+    assert "version one" in text
+    assert any("LLM down" in reason for _, reason in result.skipped)
+
+    retry = _StubLLMClient()
+    ingest_folder(str(tmp_path), client=retry)  # type: ignore[arg-type]
+    assert retry.calls == 1
+    assert "version two" in aggregate_path.read_text(encoding="utf-8")
+
+
+def test_arbitrary_exception_in_one_file_does_not_abort_run(tmp_path: Path) -> None:
+    class _ExplodingOnBClient:
+        def extract_structured(self, raw_text: str, context: str = "") -> str:
+            if "boom" in raw_text:
+                raise ValueError("totally unexpected parser explosion")
+            return f"---\ntype: Fact\n---\n\nExtracted: {raw_text.strip()}"
+
+        def summarize_sections(self, merged_sections: str) -> str:
+            return ""
+
+    (tmp_path / "a.txt").write_text("fine content", encoding="utf-8")
+    (tmp_path / "b.txt").write_text("boom", encoding="utf-8")
+
+    result = ingest_folder(str(tmp_path), client=_ExplodingOnBClient())  # type: ignore[arg-type]
+
+    aggregate = (tmp_path / f"{tmp_path.name}.md").read_text(encoding="utf-8")
+    assert "fine content" in aggregate
+    assert any("parser explosion" in reason for _, reason in result.skipped)
+
+
+def test_exit_code_reflects_skips_and_bad_root(tmp_path: Path) -> None:
+    from app.services.ingest import IngestFolderResult
+
+    clean = IngestFolderResult(root=tmp_path)
+    assert clean.exit_code == 0
+
+    partial = IngestFolderResult(root=tmp_path, skipped=[(tmp_path / "x.pdf", "reason")])
+    assert partial.exit_code == 2
+
+    bad = IngestFolderResult(root=tmp_path / "does-not-exist")
+    assert bad.exit_code == 1
+
+
+def test_backfill_skips_images_when_vision_model_configured(tmp_path: Path) -> None:
+    class _VisionBackfillClient:
+        vision_model = "some-vl-model"
+
+        def describe_image(self, image_path: Path, *, context: str = "") -> str:
+            return "vision transcription of the meter"
+
+        def extract_structured(self, raw_text: str, context: str = "") -> str:
+            return f"---\ntype: Fact\ntitle: Meter\n---\n\nExtracted: {raw_text.strip()}"
+
+        def summarize_sections(self, merged_sections: str) -> str:
+            return ""
+
+    (tmp_path / "meter.jpg").write_bytes(b"\xff\xd8\xff fake jpeg bytes")
+    client = _VisionBackfillClient()
+    ingest_folder(str(tmp_path), client=client)  # type: ignore[arg-type]
+
+    transcript = tmp_path / ".okf-transcripts" / "meter.jpg.txt"
+    assert transcript.is_file()
+    transcript.unlink()
+
+    # Unchanged re-ingest must NOT backfill a contradicting tesseract transcript.
+    ingest_folder(str(tmp_path), client=client)  # type: ignore[arg-type]
+    assert not transcript.exists()
