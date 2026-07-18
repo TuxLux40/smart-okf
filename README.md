@@ -7,7 +7,7 @@
 
 **Local-first [OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) knowledge base** for sensitive personal documents. Point it at a folder tree — health records, insurance, government correspondence, provider contracts — and it turns every folder into one aggregate Markdown file, extracted by an LLM you run yourself. Nothing leaves your machine, and the originals never move.
 
-Ships as a [Claude Code / MCP-style agent skill](SKILL.md): install it once, and any skill-aware agent can ingest new documents and answer questions from the knowledge base on request — no server, no daemon, no webapp.
+Ships as a [Claude Code agent skill](SKILL.md): install it once, and any skill-aware agent with local filesystem access can ingest new documents and answer questions from the knowledge base on request — no server, no daemon, no webapp. Agents *without* filesystem access (a web-based agent, say) need a different access path — that's [R1 on the roadmap](#roadmap), not solved yet.
 
 ---
 
@@ -69,7 +69,8 @@ Humans browse folders directly · agents query via ripgrep / this skill
 | Agent-led onboarding (checks deps, detects LLM backend, writes config) | ✅ |
 | Scheduled ingest (cron/systemd timer) — same CLI, no watcher process | ✅ |
 | Git-based change tracking of the document root | ✅ |
-| Enrichment gate, derive/dream reasoning, FastAPI, MCP server | ⏳ Optional/later — see [Roadmap](#roadmap) |
+| Enrichment gate, derive/dream reasoning (extra reasoning loop on top of extraction) | ⏳ Optional/later — see [Roadmap](#roadmap) |
+| Remote access for agents without filesystem access — git remote or MCP server | ⏳ Undecided — see [R1](#roadmap) |
 
 See [`docs/DESIGN.md`](docs/DESIGN.md) for the full system design, scope amendments, and why each optional piece was cut or deferred.
 
