@@ -386,6 +386,8 @@ Load order: field defaults → `smart-okf.yaml` → `SMART_OKF_*` env. See [`sma
 | `SMART_OKF_LLM_MODEL` | `qwen2.5:3b` | Extractor model |
 | `SMART_OKF_LLM_API_KEY` | `not-needed` | If required |
 | `SMART_OKF_VISION_MODEL` | unset | Optional vision for images |
+| `SMART_OKF_DREAM_MODEL` | unset | Dreamer model (falls back to `LLM_MODEL`) — use the smartest you have; dreaming is reasoning |
+| `SMART_OKF_DREAM_HOST` | unset | Dreamer server (falls back to `LLM_HOST`); remote hosts need `allow_remote_llm` |
 | `SMART_OKF_CONFIG` | `smart-okf.yaml` | Config path |
 
 Remote non-allowlisted hosts need `allow_remote_llm`. Suffixes: [`app/constants.py`](app/constants.py).

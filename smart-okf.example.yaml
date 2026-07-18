@@ -12,6 +12,12 @@ llm_model: gemma-4-e4b-it-qat
 # Optional: vision-capable model on the same host for standalone images (handwriting + scene).
 # vision_model: qwen3-vl-2b-instruct
 
+# Dreamer: model for the cross-folder synthesis pass (scripts/dream.py). Reasoning, not
+# extraction — use the smartest model you have. Defaults to llm_model/llm_host when unset.
+# A remote dream_host needs allow_remote_llm: true (digests are distilled but personal).
+# dream_model: qwen3-30b-a3b
+# dream_host: http://192.168.178.50:8080
+
 # Layout-aware PDF backend via external `marker_single` CLI (pipx install marker-pdf).
 # Not a pip dependency of this repo. Set false / pass --no-marker to use pdfplumber+OCRmyPDF only.
 # use_marker: true

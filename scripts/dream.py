@@ -12,6 +12,7 @@ Usage:
 """
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -40,8 +41,18 @@ def main() -> None:
         default=None,
         help="Document root to dream over. Omit to use every document_roots entry from smart-okf.yaml.",
     )
-    parser.add_argument("--host", default=None, help="OpenAI-compatible server URL (default: config/env)")
-    parser.add_argument("--model", default=None, help="Model name (default: config/env)")
+    parser.add_argument(
+        "--host",
+        default=None,
+        help="OpenAI-compatible server URL for the dreamer (default: dream_host from config/env, "
+        "falling back to the extractor's llm_host)",
+    )
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="Dreamer model name (default: dream_model from config/env, falling back to llm_model). "
+        "Dreaming is reasoning, not extraction — use the smartest model you have access to.",
+    )
     parser.add_argument("--force", action="store_true", help="Re-dream even when no aggregate changed")
     parser.add_argument("--quiet", action="store_true", help="Suppress progress output")
     args = parser.parse_args()
@@ -60,8 +71,18 @@ def main() -> None:
         )
         return
 
-    host: str | None = args.host or (config.llm_host if config is not None else None)
-    model: str | None = args.model or (config.llm_model if config is not None else None)
+    # Dreamer resolution: CLI flag > dream_* (config/env) > extractor settings (config, then
+    # LLMClient's own SMART_OKF_LLM_* env fallback via model/host=None).
+    host: str | None = (
+        args.host
+        or os.getenv("SMART_OKF_DREAM_HOST")
+        or ((config.dream_host or config.llm_host) if config is not None else None)
+    )
+    model: str | None = (
+        args.model
+        or os.getenv("SMART_OKF_DREAM_MODEL")
+        or ((config.dream_model or config.llm_model) if config is not None else None)
+    )
 
     exit_code = 0
     for folder in folders:

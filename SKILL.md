@@ -85,16 +85,34 @@ do not re-read every original PDF for facts that were already distilled.
    `vision_model` in `smart-okf.yaml` if yes. Vision + structured extraction = two LLM calls
    per image.
 
-4. **Ask where their documents live** (`document_roots` — can be more than one path) and
+4. **Ask which model should dream** (`dream_model` / `dream_host`). The dream pass
+   (see **Dreaming** below) is cross-folder *reasoning* — conflicts, patterns, matter
+   linking — and benefits from the smartest model available more than any other stage;
+   the extractor's small fast model is often not the right choice here. Offer three
+   options and explain the tradeoff:
+
+   - **Same as extractor** (default — leave `dream_model` unset): fine to start, weakest
+     reasoning.
+   - **Bigger local model**: same or another local host (a second machine's llama.cpp,
+     a GPU box on the LAN). Best quality without data leaving the network. If their
+     backend lists larger models (30B+, `thinking`/`reasoner` variants), suggest one.
+   - **Hosted model** (`dream_host` pointing at a cloud API + `allow_remote_llm: true`):
+     strongest reasoning. Be explicit about what leaves the machine: not the raw
+     documents, but the aggregate *digests* — distilled personal facts, names, reference
+     numbers. Only with informed consent, never as a silent default.
+
+   Dreaming runs rarely (after ingest batches), so a slow-but-smart model costs little.
+
+5. **Ask where their documents live** (`document_roots` — can be more than one path) and
    confirm the folder exists and looks like personal documents, not a code repo or media
    library.
 
-5. **Write `smart-okf.yaml`** in the skill root from what you learned (see
+6. **Write `smart-okf.yaml`** in the skill root from what you learned (see
    [smart-okf.example.yaml](smart-okf.example.yaml): `document_roots`, `llm_host`, `llm_model`,
-   optional `vision_model` / `use_marker`). Plain YAML — write it directly; there is no
-   `scripts/onboard.py`.
+   optional `vision_model` / `dream_model` / `dream_host` / `use_marker`). Plain YAML —
+   write it directly; there is no `scripts/onboard.py`.
 
-6. Offer a first ingest on one subfolder as a smoke test before the whole tree — see
+7. Offer a first ingest on one subfolder as a smoke test before the whole tree — see
    **Ingest cautions** below.
 
 ## Query (default operation)
@@ -280,8 +298,11 @@ uv run python scripts/dream.py /path/to/documents
   aggregates), **Patterns**, **Open actions**.
 - **Incremental like ingest**: aggregate hashes live in the synthesis frontmatter; when no
   aggregate changed since the last dream, zero LLM calls. `--force` re-dreams anyway.
-- Uses the same extraction LLM (`--host`/`--model`/config). Large KBs are synthesized in
-  batches, then consolidated — transparent, no flag.
+- **Dreamer model is its own choice** (`dream_model`/`dream_host` in config,
+  `SMART_OKF_DREAM_MODEL`/`SMART_OKF_DREAM_HOST`, or `--model`/`--host`): falls back to the
+  extractor model when unset, but reasoning quality scales with model size here more than
+  anywhere else — see Onboarding step 4. Remote `dream_host` needs `allow_remote_llm`.
+  Large KBs are synthesized in batches, then consolidated — transparent, no flag.
 - Run it after ingest runs (same cron, one line later) or on demand when the user asks a
   cross-folder question and `synthesis.md` is stale/missing. Commit it with the ingest commit.
 - The synthesis cites aggregate paths — treat it as a **map**, not a source of truth: verify

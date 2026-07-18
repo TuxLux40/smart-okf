@@ -107,6 +107,18 @@ class SmartOkfConfig(BaseSettings):
     scene description), served by the same `llm_host`. None (default) falls back to
     tesseract-only OCR — no vision capability, no dependency added. See README.md."""
 
+    dream_model: str | None = None
+    """Model for the dream synthesis pass (`scripts/dream.py`). None (default) uses
+    `llm_model`. Dreaming is cross-folder *reasoning*, not extraction — it benefits from
+    the smartest model available more than any other stage, so users with stronger
+    hardware (or willingness to use a hosted model, see `dream_host`) point this at a
+    bigger model than the extractor."""
+
+    dream_host: str | None = None
+    """Server for the dream model. None (default) uses `llm_host`. Subject to the same
+    remote-host gate as `llm_host` (`allow_remote_llm` + allowlist): dream input is
+    digests of personal aggregates — distilled, but still personal data."""
+
     @field_validator("document_roots", mode="before")
     @classmethod
     def validate_document_roots(cls, v: list[Path | str]) -> list[Path]:
@@ -116,16 +128,18 @@ class SmartOkfConfig(BaseSettings):
             raise ValueError("document_roots must contain at least one path")
         return roots
 
-    @field_validator("llm_host")
+    @field_validator("llm_host", "dream_host")
     @classmethod
-    def validate_llm_host(cls, v: str, info: ValidationInfo) -> str:
+    def validate_llm_host(cls, v: str | None, info: ValidationInfo) -> str | None:
         """Reject non-allowlisted remote hosts unless `allow_remote_llm` is set."""
+        if v is None:
+            return v
         hostname = parse_llm_host(v)
         if host_is_allowlisted(hostname, info.data.get("llm_host_allowlist", [])):
             return v
         if info.data.get("allow_remote_llm"):
             return v
-        raise ValueError(f"llm_host hostname {hostname!r} not in allowlist; set allow_remote_llm=true")
+        raise ValueError(f"{info.field_name} hostname {hostname!r} not in allowlist; set allow_remote_llm=true")
 
     @classmethod
     def settings_customise_sources(

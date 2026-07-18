@@ -60,3 +60,24 @@ def test_host_is_allowlisted_rejects_unknown_public_host() -> None:
 
 def test_host_is_allowlisted_accepts_rfc1918() -> None:
     assert host_is_allowlisted("10.0.0.5", []) is True
+
+
+def test_dream_model_and_host_default_to_none_fallback_to_extractor() -> None:
+    config = _config()
+    assert config.dream_model is None
+    assert config.dream_host is None
+
+
+def test_dream_host_remote_refused_without_allow_remote_llm() -> None:
+    with pytest.raises(ValidationError, match="dream_host"):
+        _config(dream_host="https://api.openai.com/v1")
+
+
+def test_dream_host_remote_allowed_with_allow_remote_llm() -> None:
+    config = _config(dream_host="https://api.openai.com/v1", allow_remote_llm=True)
+    assert config.dream_host == "https://api.openai.com/v1"
+
+
+def test_dream_host_local_allowed_by_default() -> None:
+    config = _config(dream_host="http://192.168.178.2:8080")
+    assert config.dream_host == "http://192.168.178.2:8080"
