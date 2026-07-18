@@ -19,20 +19,41 @@ already told you where their documents live and which LLM to use, run this inter
 doing anything else. This is a conversation you conduct, not a script to invoke — walk the user
 through it, don't dump all the questions at once.
 
-1. **Check system prerequisites** — run each and note what's missing, don't just assume:
+**Two roles (say this once early — it answers "why a local model if Claude is driving?"):**
+
+- **Orchestrator** = you (Claude Code / OpenWebUI / Hermes / cron): decide when to ingest and
+  answer from finished `.md` files. You never send raw PDF/image bytes to a cloud model for
+  extraction.
+- **Extractor** = the local OpenAI-compatible model the *script* always calls
+  (`llm_host` / `llm_model`). Cron and interactive agent runs behave the same because
+  extraction is always that second call inside `scripts/ingest_folder.py`.
+
+There is no "skip the local model; orchestrator extracts by hand" mode — the script has no
+callback into the live agent. Orchestrator and extractor can be different sizes/vendors; only
+the extractor must be local/LAN if privacy of raw documents matters.
+
+1. **Where tools install** — system CLIs (`rg`, `tesseract`, `gs`, `marker_single`) and the
+   Python skill venv (`uv sync`) live on the **machine that runs ingest and hosts the
+   extractor model**, not necessarily on a NAS that only holds the document tree. Documents
+   may be remote-mounted (SSHFS/NFS); deps and GPU/CPU inference stay on the workstation.
+
+2. **Check system prerequisites** — run each and note what's missing, don't just assume:
 
    ```bash
-   command -v rg && command -v tesseract && command -v gs
+   command -v rg && command -v tesseract && command -v gs && command -v marker_single
    ```
 
    `rg` (ripgrep) is needed for querying; `tesseract` for image OCR; `gs` (Ghostscript) is an
-   OCRmyPDF dependency for scanned-PDF OCR. For anything missing, detect the package manager
-   (`command -v pacman`/`apt`/`dnf`/`brew`) and give the user the exact install command —
-   **ask before running a package-manager install yourself**, since it needs sudo and touches
-   the system outside this project.
+   OCRmyPDF dependency for scanned-PDF OCR when `--no-marker` is used; `marker_single` is the
+   default layout-aware PDF backend (tables, forms). **marker is not bundled in this repo** —
+   install it *externally* the same way as tesseract: `pipx install marker-pdf` (own venv, own
+   PyTorch). Its code is GPL-3.0 and model weights use a modified OpenRAIL-M license (free for
+   personal/research use; commercial redistribution needs a license from datalab.to).
+   `--no-marker` / `use_marker: false` skips it and uses pdfplumber+OCRmyPDF only. For
+   `rg`/`tesseract`/`gs`, detect the package manager (`command -v pacman`/`apt`/`dnf`/`brew`)
+   and give the exact install command. **Ask before running any install yourself.**
 
-2. **Detect a local LLM backend** — probe the common defaults before asking the user to type
-   a host:
+3. **Detect a local LLM backend** (the extractor) — probe common defaults before asking:
 
    ```bash
    for url in http://localhost:11434 http://127.0.0.1:1234 http://localhost:8080; do
@@ -41,20 +62,29 @@ through it, don't dump all the questions at once.
    ```
 
    Ollama defaults to `:11434`, LM Studio to `:1234`, llama.cpp's `llama-server` commonly to
-   `:8080`. If one responds, list its models and ask the user which to use for extraction. If
-   none respond, ask what they use and where it runs.
+   `:8080`. If one responds, list its models and ask which to use for **extraction** —
+   prefer a 7B+ instruction-tuned model over a 2–3B one if hardware fits; extraction quality
+   (OKF structure, not missing fields) scales with model size. If none respond, ask what they
+   use and where it runs. Remind them this model is the *extractor*, not the chat agent
+   driving the skill.
 
-3. **Ask where their documents live** (`document_roots` — can be more than one path) and
-   confirm the folder actually exists and looks like personal documents, not a code repo or
-   media library, before proceeding.
+   If the user has standalone images (photos, meter readings, scans without a PDF wrapper),
+   also ask whether a listed model is vision-capable (`vl`/`vision` in the name) for
+   handwriting + brief scene description (never identifies people). Optional. Written to
+   `vision_model` in `smart-okf.yaml` if yes. Vision + structured extraction = two LLM calls
+   per image.
 
-4. **Write `smart-okf.yaml`** in the skill root from what you learned (see
-   [smart-okf.example.yaml](smart-okf.example.yaml) for the shape: `document_roots`,
-   `llm_host`, `llm_model`). This is a plain YAML file — write it directly, you don't need a
-   script for this.
+4. **Ask where their documents live** (`document_roots` — can be more than one path) and
+   confirm the folder exists and looks like personal documents, not a code repo or media
+   library.
 
-5. Offer to run a first ingest on one subfolder as a smoke test before ingesting everything —
-   see **Ingest cautions** below for why.
+5. **Write `smart-okf.yaml`** in the skill root from what you learned (see
+   [smart-okf.example.yaml](smart-okf.example.yaml): `document_roots`, `llm_host`, `llm_model`,
+   optional `vision_model` / `use_marker`). Plain YAML — write it directly; there is no
+   `scripts/onboard.py`.
+
+6. Offer a first ingest on one subfolder as a smoke test before the whole tree — see
+   **Ingest cautions** below.
 
 ## Query (default operation)
 
@@ -94,6 +124,12 @@ The documents root is a git repository — commit after each ingest run so agent
 changed (`git -C /path/to/documents log --stat`, `git diff HEAD~1 -- '*.md'`). Use it to answer
 "what's new since last month" questions and to safely revert a bad aggregate or OCR pass.
 
+**Remote / web agents:** same git history can push to a **private** remote (Gitea, GitLab, …)
+so agents without local NAS access read finished `.md` aggregates — not raw PDFs. Prefer
+Markdown-only remotes when privacy allows. Gitea is not an MCP server by itself; MCP is
+optional glue on a clone. Full write-up: [README — Remote access via git](README.md#remote-access-via-git).
+Do not put personal case details in this skill file when documenting examples.
+
 ## Ingest
 
 Requires an OpenAI-compatible LLM server (LM Studio, llama.cpp `llama-server`, Ollama, vLLM).
@@ -106,13 +142,18 @@ SMART_OKF_LLM_MODEL=gemma-4-e4b-it-qat \
 uv run python scripts/ingest_folder.py /path/to/documents
 ```
 
-- Supported: `.pdf`, `.txt`, `.docx`, `.eml`, `.csv`, `.xlsx`, and images (`.png`/`.jpg`/`.jpeg`
-  via tesseract OCR, read-only).
-- **Scanned PDFs are OCRed in place**: OCRmyPDF (deu+eng) embeds a text layer into the
-  original PDF when it has none, so OCR runs once per document ever — later ingests and PDF
-  editors reuse the embedded layer. This rewrites the PDF file itself (content preserved).
-  Standalone images are never modified — their OCR text lives in the transcript store and
-  aggregate only.
+- Supported: `.pdf`, `.txt`, `.docx`, `.eml`, `.csv`, `.xlsx`, and images (`.png`/`.jpg`/`.jpeg`,
+  read-only). Images use tesseract OCR by default (text only); pass `--vision-model <name>`
+  (a vision-capable model served by the same host) for handwriting transcription plus a brief
+  scene description instead — useful for things like a photographed utility meter reading where
+  plain OCR misses handwritten digits. No extra dependency either way (two LLM calls per image
+  when vision is on: describe, then structure).
+- **PDF path (default = external marker):** layout-aware markdown via `marker_single` (not a
+  pip dep of this skill — install with `pipx install marker-pdf`). Marker does its own layout
+  OCR; it does **not** rewrite the PDF in place. **`--no-marker`:** pdfplumber + OCRmyPDF
+  (deu+eng) embeds a searchable text layer into scanned PDFs once — later ingests and PDF
+  editors reuse it. Standalone images are never modified — text lives in the transcript store
+  and aggregate only.
 - **Every extraction writes a raw transcript** to `<root>/.okf-transcripts/<relpath>.txt` —
   the lossless full text, so OCR/extraction never needs to repeat and agents can read exact
   wording without touching originals.
@@ -127,10 +168,11 @@ uv run python scripts/ingest_folder.py /path/to/documents
 - Every LLM call (chunked or not) is logged to `<root>/.okf-llm-log.jsonl` — model, duration,
   retry count, success/failure. Useful for spotting a flaky backend or unusually slow document:
   `rg '"success": false' /path/to/documents/.okf-llm-log.jsonl`.
-- Pass `--use-marker` for layout-aware PDF extraction (tables, forms) if the user has
-  [marker](https://github.com/datalab-to/marker)'s `marker_single` installed — see
-  Prerequisites in [README.md](README.md). Off by default; explicit-fails (not silent
-  fallback) if requested but not installed.
+- [marker](https://github.com/datalab-to/marker)'s `marker_single` is used by default for
+  layout-aware PDF extraction (tables, forms) — see Prerequisites in [README.md](README.md).
+  Pass `--no-marker` to skip it and use plain pdfplumber/OCRmyPDF instead. If marker was never
+  installed and `--no-marker` isn't passed, ingest explicit-fails (not a silent quality
+  downgrade) — install it or add the flag.
 - The run reports written aggregates, unchanged folders, and skipped files at the end; relay
   written + skipped to the user.
 - Cron/systemd-timer use the same command — no daemon, no watcher. Example crontab line:
@@ -178,11 +220,14 @@ real tree (originals + aggregates) untouched.
 
 Environment variables (or `smart-okf.yaml`, see [smart-okf.example.yaml](smart-okf.example.yaml)):
 
-| Variable                  | Default                    | Purpose                                          |
-| ------------------------- | -------------------------- | ------------------------------------------------ |
-| `SMART_OKF_LLM_HOST`    | `http://localhost:11434` | OpenAI-compatible`/v1/chat/completions` server |
-| `SMART_OKF_LLM_MODEL`   | `qwen2.5:3b`             | Model name as the server reports it              |
-| `SMART_OKF_LLM_API_KEY` | `not-needed`             | Only for servers that require auth               |
+| Variable                   | Default                  | Purpose |
+| -------------------------- | ------------------------ | ------- |
+| `SMART_OKF_LLM_HOST`     | `http://localhost:11434` | Extractor: OpenAI-compatible `/v1/chat/completions` server |
+| `SMART_OKF_LLM_MODEL`    | `qwen2.5:3b`             | Extractor model name as the server reports it |
+| `SMART_OKF_LLM_API_KEY`  | `not-needed`             | Only for servers that require auth |
+| `SMART_OKF_VISION_MODEL` | unset                    | Optional vision model on the same host for images |
+| `SMART_OKF_CONFIG`       | `smart-okf.yaml`         | Path to YAML config |
 
 Remote (non-localhost/RFC1918) LLM hosts are refused unless `allow_remote_llm` is set — keeps
-sensitive documents off the cloud by default.
+raw document text off the cloud by default. The orchestrating agent can still be a cloud model;
+it only sees aggregates/transcripts you choose to open, not the ingest subprocess payload.

@@ -56,23 +56,27 @@ the document root itself.
 Still open — numbered independently from the legacy PR 0–18 plan above (which this amendment
 already superseded) to avoid implying they continue that sequence:
 
-#### PR R1: Remote agent access
+#### PR R1: Remote agent access — **decided: private git remote**
 
-**Problem:** Web-based agents (Claude, others) need read (and eventually write) access to the KB.
-Git is the natural fit — diffable, no daemon — but a public host (GitHub) is a real privacy
-concern for sensitive personal documents; an MCP server is more "native" for tool-calling agents
-but is new infrastructure to build and run.
+**Problem:** Web-based agents (Claude, others) need read access to the KB without a local
+filesystem on the user's NAS.
 
-**Options (undecided — needs a decision, not just code):**
-1. Self-hosted git remote (Gitea/Forgejo, already in the homelab) + Tailscale for access control.
-   Zero new server code; agents clone/pull like any repo. Coarsest-grained access (whole repo).
-2. MCP server exposing `search`/`read`/`propose_write` tools over the existing services
-   (`app/services/ingest.py`, a new `app/services/search.py`). More work, finer-grained and
-   auditable access, no raw file/git exposure.
-3. Both — MCP as the primary interface, git remote as the human-facing/backup access path.
+**Decision (2026-07-18):** **Private git remote is the sync mechanism.** Ingest stays local;
+push finished aggregates (optionally Markdown-only) to Gitea/Forgejo/GitLab self-hosted (or
+similar), preferably over Tailscale/LAN — not a public GitHub dump of personal PDFs. Web agents
+consume Markdown via clone/pull or a product connector; they do not re-run OCR.
 
-**Files (option 2):** `app/mcp/server.py`, `app/mcp/tools.py`, `app/services/search.py` (ripgrep
-wrapper). Revives the `mcp` dependency removed in the 2026-07-17 rewrite.
+**MCP is optional glue, not the source of truth.** A Gitea repo is not an MCP server by itself.
+If a product wants tool-calling APIs, an MCP process can wrap a *checkout* of that remote
+(search/read). Building a smart-okf-native MCP server (option 2 below) stays optional/later —
+revives the `mcp` dependency only if we need finer-grained tools than “git + ripgrep on a clone.”
+
+**Rejected as primary:** custom FastAPI KB server for remote access (cut earlier); public git
+hosts for full document trees without careful filtering.
+
+**Operational follow-through (not greenfield product code):** document push filters (e.g. only
+`*.md`), example remotes, and how Claude web / other agents attach to a private repo or MCP-
+wrapped clone — see README §"Remote access via git".
 
 #### PR R2: Cross-folder consolidation pass
 
@@ -138,18 +142,35 @@ subcommands (or a separate `scripts/manage_cron.py`) wrapping `crontab -l`/`cron
 a marked block, so re-running install is idempotent. Depends on the access-model decision (R1)
 only loosely — independent otherwise.
 
+#### PR R6: Docling as a swappable extraction backend
+
+**Problem:** `app/services/text_extraction.py` hand-rolls per-format extraction (pdfplumber,
+python-docx, stdlib email, openpyxl/csv). [Docling](https://github.com/docling-project/docling)
+(IBM/LF AI, MIT) unifies PDF/DOCX/XLSX/CSV/`.eml` behind one API and has genuine `.eml` support
+most general document tools lack — evaluated 2026-07-18, not adopted: its standard PDF pipeline
+still requires PyTorch (`docling-ibm-models`, see upstream issue #648), so it's no lighter than
+marker despite being MIT and importable directly; its native output is its own `DoclingDocument`
+structure, not markdown, so the OKF-translation work in `ingest.py` wouldn't shrink; and it has no
+equivalent to OCRmyPDF's in-place searchable-PDF rewrite.
+
+**Design sketch, if revisited:** a `text_extraction_backend: pdfplumber | docling` config switch
+(same shape as `use_marker`), Docling as an actual pip dependency (its license allows it, unlike
+marker) behind an extras group so users who don't want the PyTorch weight can skip installing it.
+Only worth doing if pdfplumber/OCRmyPDF quality becomes a specific, named pain point — not before.
+
 ### 2026-07-18: chunking, call logging, marker (shipped); langfuse (rejected)
 
 User surfaced three external libraries (chonkie, langfuse, marker) found in a video. Evaluated
 and decided:
 
-- **Chunking guard (chonkie), shipped.** Confirmed real bug: no length/token guard existed
+- **Chunking guard, shipped (stdlib only).** Confirmed real bug: no length/token guard existed
   anywhere in the pipeline — `extract_document()` sent arbitrary-size text to the LLM in one
   call, silently failing (3 retries then "skipped") on documents exceeding the model's context.
-  `app/services/chunking.py` splits oversized text (>`CHUNK_CHAR_THRESHOLD` chars) via
-  `chonkie.RecursiveChunker` in character-count mode (the pipeline is backend-agnostic, so a
-  real tokenizer can't be assumed); `extract_document()` extracts per chunk and
-  `merge_chunk_documents()` merges the results back into exactly one document, preserving the
+  `app/services/chunking.py` splits oversized text (>`CHUNK_CHAR_THRESHOLD` chars) with a
+  character-budget greedy splitter (paragraph/line/space preferred). An earlier draft used
+  chonkie's RecursiveChunker; dropped as overkill for character mode. `extract_document()`
+  extracts per chunk and `merge_chunk_documents()` merges back into one document (tags union;
+  empty first-chunk title/description/source filled from later chunks), preserving the
   one-file-one-aggregate-section invariant.
 - **JSONL LLM call log, shipped, as the langfuse alternative.** Langfuse (self-hosted needs
   Postgres + ClickHouse + Redis + S3) was rejected outright — categorically heavier
@@ -159,13 +180,109 @@ and decided:
   `<root>/.okf-llm-log.jsonl` (model, duration, retry count, success/failure) — dependency-free,
   local, greppable. Wired on by default for real ingest runs (`ingest_folder()`'s default
   client construction), silent no-op if `log_path` is unset (tests).
-- **marker opt-in PDF backend, shipped, external-CLI only.** marker (layout-aware PDF→markdown,
-  GPL-3.0 code + modified-OpenRAIL-M model weights) is invoked via `marker_single` subprocess
-  when `--use-marker`/`use_marker: true` (smart-okf.yaml) is set — never a pip dependency of
-  this project. Same external-tool pattern as `tesseract`/`ocrmypdf`'s `ghostscript`: keeps
-  marker's PyTorch install and GPL/OpenRAIL-M terms fully outside this MIT-licensed project's
-  own dependency graph, which matters given the intent to publish the skill. Explicit-fails
-  (not silent fallback) if requested but `marker_single` isn't on PATH.
+- **marker PDF backend, shipped, external-CLI only, opt-out (flipped from opt-in 2026-07-18).**
+  marker (layout-aware PDF→markdown, GPL-3.0 code + modified-OpenRAIL-M model weights) is
+  invoked via `marker_single` subprocess unless `--no-marker`/`use_marker: false`
+  (smart-okf.yaml) is set — **never a pip dependency / never bundled in this repo**. Onboarding
+  (or the user) installs it externally (`pipx install marker-pdf`) when the skill is set up,
+  same as `tesseract`/`ghostscript`. That is intentional: PyTorch + marker's licenses stay
+  outside smart-okf's MIT graph so the published skill stays clean; the skill only shells out
+  to a PATH binary. Explicit-fails (not silent fallback) if marker is expected (default) but
+  `marker_single` isn't on PATH. Install tools on the **machine that runs ingest / hosts the
+  extractor model**, not on a NAS that only stores documents. Marker path does not run
+  OCRmyPDF in-place (no searchable-PDF rewrite); `--no-marker` restores pdfplumber+OCRmyPDF.
+  Transcript backfill for missing sidecars always uses the light path (`use_marker=False`) so
+  an unchanged folder never cold-starts PyTorch just to recover a `.txt`.
+
+### 2026-07-18: orchestrator/extractor terminology, and two evaluated-but-not-adopted ideas
+
+Bugs found the same day (fixed): `LLMClient.model` never read `SMART_OKF_LLM_MODEL` from the
+environment (only `host` had the `os.getenv` fallback — asymmetric); CLI built `LLMClient`
+without `log_path` so JSONL never wrote on real runs; `_log_call` always recorded `self.model`
+even for vision calls (now logs the model argument actually used). Stale `scripts/onboard.py`
+error/example-yaml references removed — onboarding is agent-conversational only.
+
+**Orchestrator vs. extractor** is now a documented, explicit distinction (README §"Orchestrator
+vs. extractor"): the *orchestrator* is whatever agent invokes `scripts/ingest_folder.py` (Claude
+Code, an OpenWebUI or Hermes automation, cron — no distinction between "agent-triggered" and
+"cron-triggered", the script behaves identically either way); the *extractor* is the separate
+local LLM the script always calls via `SMART_OKF_LLM_HOST`/`MODEL`. There is no "same" mode where
+the orchestrating agent's own reasoning serves as the extractor — the script is a subprocess with
+no callback into a live agent's inference, so extraction is always a second, separate LLM call
+regardless of what triggered the run. An earlier framing in this conversation floated a
+"skip local LLM, orchestrating agent does extraction manually" onboarding branch; on reflection
+this was solving a problem that doesn't exist (scripts already serve any agent, not just cron)
+and was dropped rather than built.
+
+Two libraries were researched as candidates and **not adopted**, evaluation kept here rather than
+implemented against:
+
+- **Honcho's derive/dream loop** (the pattern `prompts/reasoning_derive.md`/`reasoning_dream.md`
+  were speculatively written against) — confirmed via Honcho's own source/docs: derive is
+  per-message/on-write via a queue-worker LLM pass producing `Document` rows in Postgres+pgvector;
+  dream is idle-triggered (not clock-scheduled — a per-peer inactivity timer that new messages
+  reset) and runs deduction/induction "specialist" passes plus surprisal-sampling over the
+  accumulated documents; query is a third, independent on-demand path. The *shape* (write-time
+  extraction vs. idle-time cross-cutting synthesis) is reusable inspiration for whatever eventually
+  wires up `reasoning_derive.md`/`reasoning_dream.md` (see R2 in the Roadmap section above); the
+  concrete implementation (Postgres, pgvector, queue workers) is not — none of that fits this
+  project's cron/filesystem model, and porting it wholesale would be exactly the kind of
+  infrastructure creep the langfuse rejection above already ruled out for the same reasons.
+- **Docling** (IBM/LF AI, MIT-licensed) was considered as a replacement for the hand-rolled
+  per-format logic in `app/services/text_extraction.py`. It does unify PDF/DOCX/XLSX/CSV/`.eml`
+  extraction behind one API (`.eml` support is a genuine advantage most general document tools
+  lack) and is permissively licensed, unlike marker — but its standard PDF pipeline still requires
+  PyTorch (`docling-ibm-models`, confirmed via upstream issue #648), so it's no lighter than
+  marker despite being importable; its native output is its own `DoclingDocument`
+  structure, not markdown, so the OKF-translation work `text_extraction.py`/`ingest.py` already do
+  wouldn't shrink; and it has no equivalent to OCRmyPDF's in-place PDF rewrite (it processes
+  in-memory, produces no searchable-PDF artifact). Not worth the dependency weight for the current
+  pdfplumber+OCRmyPDF+marker stack's actual pain points; worth a second look only if scanned-PDF
+  extraction quality becomes a real, specific complaint.
+
+### 2026-07-18: vision-model image transcription (handwriting + scene description), shipped
+
+**Problem:** standalone-image ingest (`.png`/`.jpg`/`.jpeg`) only ever ran tesseract OCR — poor
+on handwriting, and no way to know what a photo is even *of* beyond its printed text. Motivating
+case: `providers/03_Strom/Stromzaehlerstaende/` photos of a utility meter, where the reading
+itself may be a mix of a digital display and handwritten notes, and the surrounding context
+(which meter, what room) has no printed text at all.
+
+**Design decision — no new dependency, no face recognition.** The obvious paths (a dedicated
+handwriting-OCR library like TrOCR, an object-detection model like YOLO, or a face-recognition
+library) were deliberately not taken. Instead: `LLMClient.describe_image()` sends the image as a
+base64 `image_url` content part to a *vision-capable chat model* — the same OpenAI-compatible
+`/v1/chat/completions` endpoint already used for extraction, just a different (optionally
+different) model name (`vision_model`/`SMART_OKF_VISION_MODEL`/`--vision-model`). Modern local
+VL models (Qwen3-VL, InternVL3, MiniCPM-V, etc. — several already commonly available in LM
+Studio/llama.cpp/Ollama) handle handwriting transcription and general scene description well
+enough that a dedicated CV pipeline isn't justified — zero new pip dependencies, zero new
+external CLI tools, reuses infrastructure that already exists for every other extraction call.
+
+**Explicitly excluded: face/person identification.** "Basic object/people/scene recognition" was
+the original ask, but identifying *who* a person in a photo is is a materially different (and
+more invasive) capability than describing a scene. `prompts/vision_extraction.md` explicitly
+instructs the model to note a person's presence only when contextually relevant, never a name,
+appearance, or other identifying detail. If per-person identification is ever wanted, that's a
+distinct, separately-scoped feature — not bundled into this one.
+
+**Mechanics:** `extract_document()` (`app/services/ingest.py`) branches on `file_path.suffix in
+IMAGE_DOCUMENT_SUFFIXES and client.vision_model is not None` — routes to `describe_image()`
+instead of `extract_text_from_file()`; the returned text (transcription + scene description) then
+flows through the same chunk/structure/transcript pipeline as any other document, so nothing
+downstream needed to change. `vision_model` defaults to `None` (env: `SMART_OKF_VISION_MODEL`) —
+unset, behavior is byte-for-byte the old tesseract-only path; no regression for anyone who
+doesn't opt in. Detecting vision capability from a model name alone isn't reliable (LM Studio
+doesn't expose a "vision: true" flag over `/v1/models`), so this is explicit opt-in via
+onboarding/config/flag, never auto-detected.
+
+**Verified against a real photo**
+(`providers/03_Strom/Stromzaehlerstaende/2022-03-03--Zaehlerstand_Quantiusstrasse.jpg`, via
+`qwen3-vl-2b-instruct`): correctly transcribed the meter serial number, tariff type, and the
+`005.137 kWh` reading, and the scene description flagged "a person is visible" without any
+identifying detail, exactly as designed. Note: `qwen3-vl-8b-instruct` crashed LM Studio's Vulkan
+backend (`vk::Queue::submit: ErrorDeviceLost`, likely VRAM pressure on the 8GB RX 7600) on the
+first attempt — a local GPU/driver issue, not a smart-okf bug; the 2B model worked without issue.
 
 ---
 

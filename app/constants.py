@@ -45,8 +45,15 @@ tokenize differently), so exact token counting would need a specific tokenizer p
 LLM_LOG_FILENAME = ".okf-llm-log.jsonl"
 """Hidden root-level JSONL log of every LLM call: model, duration, retries, success."""
 
+VISION_EXTRACTION_PROMPT_FILE = "vision_extraction.md"
+DEFAULT_VISION_EXTRACTION_PROMPT = (
+    "Transcribe all legible text in this image verbatim, including handwriting and numbers. "
+    "Then briefly describe the scene (setting, objects, what kind of document/photo this is)."
+)
+
 IMAGE_DOCUMENT_SUFFIXES = frozenset({".png", ".jpg", ".jpeg"})
-"""Accepted but not yet extractable: standalone-image OCR lands later (PDFs OCR fine)."""
+"""Standalone images: OCRed via tesseract by default, or via a vision-capable chat model
+(handwriting + scene description) when `vision_model` is configured."""
 
 SUPPORTED_DOCUMENT_SUFFIXES = frozenset({".pdf", ".txt", ".docx", ".eml", ".csv", ".xlsx"}) | IMAGE_DOCUMENT_SUFFIXES
 TEXT_FILE_ENCODING = "utf-8"

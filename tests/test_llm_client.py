@@ -68,3 +68,57 @@ def test_no_log_path_writes_no_file(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     client.chat("system", "a prompt")
 
     assert not (tmp_path / "log.jsonl").exists()
+
+
+def test_describe_image_without_vision_model_raises(tmp_path: Path) -> None:
+    client = LLMClient(host="http://127.0.0.1:1", vision_model=None)
+    image_path = tmp_path / "meter.jpg"
+    image_path.write_bytes(b"\xff\xd8\xff fake jpeg bytes")
+
+    with pytest.raises(LLMClientError, match="vision_model"):
+        client.describe_image(image_path)
+
+
+def test_describe_image_sends_base64_image_to_configured_vision_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = LLMClient(host="http://127.0.0.1:1", vision_model="qwen3-vl-8b-instruct")
+    image_path = tmp_path / "meter.jpg"
+    image_path.write_bytes(b"\xff\xd8\xff fake jpeg bytes")
+
+    captured: dict[str, object] = {}
+
+    def _capture(**kwargs: object) -> SimpleNamespace:
+        captured.update(kwargs)
+        return _fake_success("123456 kWh, meter photo")
+
+    monkeypatch.setattr(client._client.chat.completions, "create", _capture)
+
+    result = client.describe_image(image_path, context="providers/EON/meter.jpg")
+
+    assert result == "123456 kWh, meter photo"
+    assert captured["model"] == "qwen3-vl-8b-instruct"
+    messages = captured["messages"]
+    assert isinstance(messages, list)
+    user_content = messages[1]["content"]
+    assert user_content[0]["text"] == "Image: providers/EON/meter.jpg"
+    assert user_content[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+
+
+def test_describe_image_logs_vision_model_not_extraction_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """JSONL must record the model used for the call (vision), not only self.model."""
+    log_path = tmp_path / "log.jsonl"
+    client = LLMClient(
+        host="http://127.0.0.1:1",
+        model="extraction-model",
+        vision_model="vision-model",
+        log_path=log_path,
+    )
+    image_path = tmp_path / "meter.jpg"
+    image_path.write_bytes(b"\xff\xd8\xff fake jpeg bytes")
+    monkeypatch.setattr(client._client.chat.completions, "create", lambda **kwargs: _fake_success("ok"))
+
+    client.describe_image(image_path)
+
+    record = json.loads(log_path.read_text(encoding="utf-8").strip())
+    assert record["model"] == "vision-model"

@@ -6,12 +6,12 @@ never needs re-running — post-OCR the PDF has text, so the OCR branch is skipp
 later ingests. Standalone images are OCRed read-only via tesseract (images have no
 embeddable text layer, so their text lives only in the transcript/aggregate).
 
-PDF extraction has an optional `marker` backend (layout-aware: tables, forms, complex
-documents) invoked as an external CLI subprocess — never a pip dependency of this
-project. marker's code is GPL-3.0 and its model weights use a modified OpenRAIL-M
-license; shelling out to a separately-installed `marker_single` binary (same pattern as
-`tesseract`/`ocrmypdf`'s `ghostscript` dependency) keeps this MIT-licensed project's own
-dependency graph and license unaffected. See README.md for install/licensing notes.
+PDF extraction defaults to an external `marker` CLI backend (layout-aware: tables, forms)
+— **not** a pip dependency of this project; onboarding installs `marker-pdf` externally
+(`marker_single` on PATH), same pattern as `tesseract`/`ghostscript`. GPL-3.0 code +
+modified OpenRAIL-M weights stay outside this MIT graph. Opt out via
+`ExtractionOptions(use_marker=False)` / CLI `--no-marker` for pdfplumber + in-place
+OCRmyPDF. See README.md.
 """
 
 import os
@@ -28,6 +28,7 @@ from docx import Document as DocxDocument
 
 from app.constants import IMAGE_DOCUMENT_SUFFIXES, OCR_LANGUAGES, SUPPORTED_DOCUMENT_SUFFIXES, TEXT_FILE_ENCODING
 from app.exceptions import DocumentIngestError
+from app.services.extraction_options import DEFAULT_EXTRACTION, ExtractionOptions
 
 
 def is_supported_document(file_path: Path) -> bool:
@@ -35,21 +36,24 @@ def is_supported_document(file_path: Path) -> bool:
     return file_path.suffix.lower() in SUPPORTED_DOCUMENT_SUFFIXES
 
 
-def extract_text_from_file(file_path: Path, *, use_marker: bool = False) -> str:
+def extract_text_from_file(
+    file_path: Path,
+    options: ExtractionOptions = DEFAULT_EXTRACTION,
+) -> str:
     """Extract text from a supported document.
 
-    `use_marker=True` routes `.pdf` extraction through the optional marker CLI backend
-    for layout-aware extraction (tables, forms) instead of the default pdfplumber/OCRmyPDF
-    pipeline. Explicit-fail if requested but `marker_single` isn't installed, rather than
-    silently falling back — a user who opted in should know if they didn't get it.
+    With `options.use_marker` (default True), `.pdf` extraction goes through the marker CLI
+    backend for layout-aware extraction (tables, forms). Onboarding installs `marker_single`
+    as a prerequisite; explicit-fail rather than silent fallback if missing. Pass
+    `ExtractionOptions(use_marker=False)` (CLI: `--no-marker`) for pdfplumber/OCRmyPDF only.
     """
     suffix = file_path.suffix.lower()
     if suffix in IMAGE_DOCUMENT_SUFFIXES:
         return _extract_text_from_image(file_path)
     if suffix == ".pdf":
-        if use_marker:
+        if options.use_marker:
             if not _marker_available():
-                raise DocumentIngestError("marker_single not found on PATH; install marker-pdf or drop --use-marker")
+                raise DocumentIngestError("marker_single not found on PATH; install marker-pdf or pass --no-marker")
             return _extract_text_from_pdf_via_marker(file_path)
         return _extract_text_from_pdf(file_path)
     if suffix == ".docx":
@@ -111,8 +115,29 @@ def _marker_available() -> bool:
     return shutil.which("marker_single") is not None
 
 
+def _marker_error_detail(error: BaseException) -> str:
+    """Best-effort stderr/stdout snippet for marker failures (never empty noise only)."""
+    if isinstance(error, subprocess.TimeoutExpired):
+        return "timed out after 600s"
+    if isinstance(error, subprocess.CalledProcessError):
+        parts = [f"exit {error.returncode}"]
+        for label, stream in (("stderr", error.stderr), ("stdout", error.stdout)):
+            if isinstance(stream, str) and stream.strip():
+                parts.append(f"{label}: {stream.strip()[-2000:]}")
+            elif isinstance(stream, bytes) and stream.strip():
+                parts.append(f"{label}: {stream.strip()[-2000:].decode('utf-8', errors='replace')}")
+        return "; ".join(parts)
+    return str(error)
+
+
 def _extract_text_from_pdf_via_marker(file_path: Path) -> str:
-    """Shell out to a user-installed `marker_single` CLI for layout-aware PDF extraction."""
+    """Shell out to a user-installed `marker_single` CLI for layout-aware PDF extraction.
+
+    Marker is never a pip dependency of smart-okf — onboarding installs `marker-pdf`
+    externally (pipx/sibling venv). This path does not run OCRmyPDF in-place; marker
+    handles layout + any OCR it needs itself. Use `ExtractionOptions(use_marker=False)`
+    for the pdfplumber + in-place OCRmyPDF pipeline (searchable PDF rewrite).
+    """
     with tempfile.TemporaryDirectory() as out_dir:
         try:
             subprocess.run(
@@ -123,7 +148,8 @@ def _extract_text_from_pdf_via_marker(file_path: Path) -> str:
                 timeout=600,
             )
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
-            raise DocumentIngestError(f"marker extraction failed for {file_path}") from error
+            detail = _marker_error_detail(error)
+            raise DocumentIngestError(f"marker extraction failed for {file_path}: {detail}") from error
         produced = next(Path(out_dir).rglob("*.md"), None)
         if produced is None:
             raise DocumentIngestError(f"marker produced no output for {file_path}")

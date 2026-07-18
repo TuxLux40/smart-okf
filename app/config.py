@@ -95,10 +95,17 @@ class SmartOkfConfig(BaseSettings):
     llm_host_allowlist: list[str] = Field(default_factory=lambda: list(DEFAULT_LLM_HOST_ALLOWLIST))
     llm_host: str = DEFAULT_LLM_HOST
 
-    use_marker: bool = False
-    """Route PDF extraction through the optional marker CLI backend (layout-aware: tables,
-    forms). Requires a separately-installed `marker_single` binary on PATH — never a
-    dependency of this project (marker's code is GPL-3.0). See README.md."""
+    use_marker: bool = True
+    """Route PDF extraction through the marker CLI backend (layout-aware: tables, forms).
+    Requires a separately-installed `marker_single` binary on PATH — never a pip
+    dependency of this project (marker's code is GPL-3.0); onboarding installs it as a
+    prerequisite alongside tesseract/ghostscript. Set false (CLI: `--no-marker`) to opt
+    out and use plain pdfplumber/OCRmyPDF instead. See README.md."""
+
+    vision_model: str | None = None
+    """Vision-capable model name for standalone image ingest (handwriting transcription +
+    scene description), served by the same `llm_host`. None (default) falls back to
+    tesseract-only OCR — no vision capability, no dependency added. See README.md."""
 
     @field_validator("document_roots", mode="before")
     @classmethod

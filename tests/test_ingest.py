@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from app.services.ingest import folder_summary_path, ingest_folder
 
 
@@ -190,6 +192,27 @@ def test_aggregate_still_written_when_summary_synthesis_fails(tmp_path: Path) ->
     assert any("orientation summary skipped" in reason for _, reason in result.skipped)
 
 
+def test_merge_chunk_documents_fills_empty_first_chunk_identity() -> None:
+    from app.models.okf import OKFDocument, OKFFrontmatter
+    from app.services.ingest import merge_chunk_documents
+
+    first = OKFDocument(
+        frontmatter=OKFFrontmatter(type="Fact", title=None, description=None, source=None),
+        body="part one",
+    )
+    second = OKFDocument(
+        frontmatter=OKFFrontmatter(
+            type="Fact", title="Invoice 42", description="Paid already", tags=["billing"], source=None
+        ),
+        body="part two",
+    )
+    merged = merge_chunk_documents([first, second])
+    assert merged.frontmatter.title == "Invoice 42"
+    assert merged.frontmatter.description == "Paid already"
+    assert merged.frontmatter.tags == ["billing"]
+    assert "part one" in merged.body and "part two" in merged.body
+
+
 def test_oversized_document_is_chunked_and_merged_into_one_section(tmp_path: Path) -> None:
     import re
 
@@ -217,3 +240,59 @@ def test_oversized_document_is_chunked_and_merged_into_one_section(tmp_path: Pat
     assert aggregate.count("### Facts") > 1  # each chunk's own heading demoted, not dropped
     assert aggregate.count("_Source: big.txt_") == 1
     assert result.written_paths == [tmp_path / f"{tmp_path.name}.md"]
+
+
+def test_image_routes_through_vision_model_when_configured(tmp_path: Path) -> None:
+    class _VisionClient:
+        vision_model = "qwen3-vl-8b-instruct"
+
+        def __init__(self) -> None:
+            self.described: list[str] = []
+
+        def describe_image(self, image_path: Path, *, context: str = "") -> str:
+            self.described.append(context)
+            return "Meter reading: 042317 kWh. A power meter mounted on a wall."
+
+        def extract_structured(self, raw_text: str, context: str = "") -> str:
+            return f"---\ntype: Fact\ntitle: Meter\n---\n\nExtracted: {raw_text.strip()}"
+
+        def summarize_sections(self, merged_sections: str) -> str:
+            return ""
+
+    (tmp_path / "meter.jpg").write_bytes(b"\xff\xd8\xff fake jpeg bytes")
+    client = _VisionClient()
+
+    result = ingest_folder(str(tmp_path), client=client)  # type: ignore[arg-type]
+
+    assert client.described == ["meter.jpg"]
+    assert result.written_paths == [tmp_path / f"{tmp_path.name}.md"]
+    aggregate = (tmp_path / f"{tmp_path.name}.md").read_text(encoding="utf-8")
+    assert "Meter reading: 042317 kWh" in aggregate
+    transcript = (tmp_path / ".okf-transcripts" / "meter.jpg.txt").read_text(encoding="utf-8")
+    assert "power meter mounted on a wall" in transcript
+
+
+def test_image_falls_back_to_tesseract_when_no_vision_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services import ingest as ingest_module
+
+    class _NoVisionClient:
+        vision_model = None
+
+        def extract_structured(self, raw_text: str, context: str = "") -> str:
+            return f"---\ntype: Fact\ntitle: Meter\n---\n\nExtracted: {raw_text.strip()}"
+
+        def summarize_sections(self, merged_sections: str) -> str:
+            return ""
+
+    def _fake_extract_text_from_file(file_path: Path, options: object = None) -> str:
+        assert file_path.suffix == ".jpg"
+        return "tesseract OCR output"
+
+    monkeypatch.setattr(ingest_module, "extract_text_from_file", _fake_extract_text_from_file)
+    (tmp_path / "meter.jpg").write_bytes(b"\xff\xd8\xff fake jpeg bytes")
+
+    result = ingest_folder(str(tmp_path), client=_NoVisionClient())  # type: ignore[arg-type]
+
+    assert result.written_paths == [tmp_path / f"{tmp_path.name}.md"]
+    aggregate = (tmp_path / f"{tmp_path.name}.md").read_text(encoding="utf-8")
+    assert "tesseract OCR output" in aggregate

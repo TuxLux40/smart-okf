@@ -18,6 +18,8 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from app.config import SmartOkfConfig
+from app.constants import LLM_LOG_FILENAME
+from app.services.extraction_options import ExtractionOptions
 from app.services.ingest import IngestFolderResult, ingest_folder
 from app.services.llm_client import LLMClient
 
@@ -48,10 +50,17 @@ def main() -> None:
     parser.add_argument("--host", default=None, help="OpenAI-compatible server URL (default: config/env)")
     parser.add_argument("--model", default=None, help="Model name (default: config/env)")
     parser.add_argument(
-        "--use-marker",
+        "--vision-model",
+        default=None,
+        help="Vision-capable model for standalone image ingest (handwriting + scene "
+        "description), served by --host. Default: config/env, or tesseract-only OCR if unset.",
+    )
+    parser.add_argument(
+        "--no-marker",
         action="store_true",
-        help="Route PDF extraction through the optional marker CLI backend (layout-aware: "
-        "tables, forms). Requires a separately-installed marker_single binary on PATH.",
+        help="Skip the marker CLI backend for PDF extraction, using plain pdfplumber/OCRmyPDF "
+        "instead. marker is used by default (layout-aware: tables, forms); onboarding installs "
+        "its marker_single binary as a prerequisite.",
     )
     parser.add_argument("--quiet", action="store_true", help="Suppress per-file progress output")
     args = parser.parse_args()
@@ -64,24 +73,22 @@ def main() -> None:
     elif config is not None:
         folders = [str(root) for root in config.document_roots]
     else:
-        parser.error("no folder given and no valid smart-okf.yaml found; run scripts/onboard.py first")
+        parser.error(
+            "no folder given and no valid smart-okf.yaml found; "
+            "pass a folder path or complete agent onboarding (see SKILL.md#onboarding-first-run)"
+        )
         return
 
-    client_kwargs = {}
-    if args.host:
-        client_kwargs["host"] = args.host
-    elif config is not None:
-        client_kwargs["host"] = config.llm_host
-    if args.model:
-        client_kwargs["model"] = args.model
-    elif config is not None:
-        client_kwargs["model"] = config.llm_model
-    client = LLMClient(**client_kwargs)
-    use_marker = args.use_marker or (config.use_marker if config is not None else False)
+    host: str | None = args.host or (config.llm_host if config is not None else None)
+    model: str | None = args.model or (config.llm_model if config is not None else None)
+    vision_model: str | None = args.vision_model or (config.vision_model if config is not None else None)
+    use_marker = not args.no_marker and (config.use_marker if config is not None else True)
+    options = ExtractionOptions(use_marker=use_marker)
 
     combined = IngestFolderResult(root=Path(folders[0]))
     for folder in folders:
-        result = ingest_folder(folder, client=client, use_marker=use_marker, verbose=not args.quiet)
+        client = LLMClient(model=model, host=host, log_path=Path(folder) / LLM_LOG_FILENAME, vision_model=vision_model)
+        result = ingest_folder(folder, client=client, options=options, verbose=not args.quiet)
         combined.written_paths.extend(result.written_paths)
         combined.unchanged_dirs.extend(result.unchanged_dirs)
         combined.skipped.extend(result.skipped)

@@ -4,12 +4,15 @@ Works unmodified against Ollama, llama.cpp's `llama-server`, vLLM, LM Studio, or
 OpenAI-compatible APIs — anything serving `POST {host}/v1/chat/completions`.
 """
 
+import base64
 import contextlib
 import json
+import mimetypes
 import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from openai import OpenAI
 
@@ -21,7 +24,7 @@ from app.constants import (
     DEFAULT_MAX_TOKENS,
 )
 from app.exceptions import LLMClientError
-from app.services.prompts import load_extraction_prompt, load_folder_summary_prompt
+from app.services.prompts import load_extraction_prompt, load_folder_summary_prompt, load_vision_extraction_prompt
 
 _MAX_ATTEMPTS = 3
 _RETRY_BACKOFF_SECONDS = 2.0
@@ -38,18 +41,22 @@ class LLMClient:
 
     def __init__(
         self,
-        model: str = DEFAULT_LLM_MODEL,
+        model: str | None = None,
         host: str | None = None,
         api_key: str | None = None,
         temperature: float = DEFAULT_LLM_TEMPERATURE,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         log_path: Path | None = None,
+        vision_model: str | None = None,
     ) -> None:
-        self.model = model
+        self.model: str = model if model is not None else os.getenv("SMART_OKF_LLM_MODEL", DEFAULT_LLM_MODEL)
         self.host: str = host if host is not None else os.getenv("SMART_OKF_LLM_HOST", DEFAULT_LLM_HOST)
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.log_path = log_path
+        self.vision_model: str | None = (
+            vision_model if vision_model is not None else os.getenv("SMART_OKF_VISION_MODEL")
+        )
         self._client = OpenAI(
             base_url=_as_v1_base_url(self.host),
             api_key=api_key or os.getenv("SMART_OKF_LLM_API_KEY", "not-needed"),
@@ -68,33 +75,75 @@ class LLMClient:
         Local servers (LM Studio, llama.cpp) occasionally fail transiently under
         sequential load, so requests are retried with backoff before giving up.
         """
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        return self._complete(messages, self.model, user_prompt, temperature=temperature, max_tokens=max_tokens)
+
+    def describe_image(self, image_path: Path, *, context: str = "") -> str:
+        """Transcribe (including handwriting) and briefly describe an image via a vision model.
+
+        Requires `vision_model` to be configured (`SMART_OKF_VISION_MODEL` or the constructor
+        arg) — there's no reliable way to detect vision capability from a model name alone, so
+        this is explicit opt-in rather than an auto-detected fallback.
+        """
+        if self.vision_model is None:
+            raise LLMClientError("describe_image called without a configured vision_model")
+        system_prompt = load_vision_extraction_prompt()
+        image_bytes = image_path.read_bytes()
+        mime_type = mimetypes.guess_type(image_path.name)[0] or "image/png"
+        data_url = f"data:{mime_type};base64,{base64.b64encode(image_bytes).decode('ascii')}"
+        user_text = f"Image: {context}" if context else "Image"
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": user_text},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ],
+            },
+        ]
+        return self._complete(messages, self.vision_model, user_text)
+
+    def _complete(
+        self,
+        messages: list[dict[str, Any]],
+        model: str,
+        log_prompt: str,
+        *,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> str:
+        """Run a chat completion against `model` with retry/backoff and call logging."""
         started = time.monotonic()
         last_error: Exception | None = None
         for attempt in range(_MAX_ATTEMPTS):
             try:
                 response = self._client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
+                    model=model,
+                    messages=messages,  # type: ignore[arg-type]
                     temperature=temperature if temperature is not None else self.temperature,
                     max_tokens=max_tokens if max_tokens is not None else self.max_tokens,
                 )
                 content = (response.choices[0].message.content or "").strip()
-                self._log_call(user_prompt, attempt + 1, time.monotonic() - started, success=True)
+                self._log_call(model, log_prompt, attempt + 1, time.monotonic() - started, success=True)
                 return content
             except Exception as error:
                 last_error = error
                 if attempt < _MAX_ATTEMPTS - 1:
                     time.sleep(_RETRY_BACKOFF_SECONDS * (attempt + 1))
-        self._log_call(user_prompt, _MAX_ATTEMPTS, time.monotonic() - started, success=False, error=str(last_error))
+        self._log_call(
+            model, log_prompt, _MAX_ATTEMPTS, time.monotonic() - started, success=False, error=str(last_error)
+        )
         raise LLMClientError(
-            f"LLM request failed for model {self.model} after {_MAX_ATTEMPTS} attempts: {last_error}"
+            f"LLM request failed for model {model} after {_MAX_ATTEMPTS} attempts: {last_error}"
         ) from last_error
 
     def _log_call(
         self,
+        model: str,
         user_prompt: str,
         attempts: int,
         duration_s: float,
@@ -104,13 +153,14 @@ class LLMClient:
     ) -> None:
         """Append one JSONL record for this call's final outcome. No-op if log_path is unset.
 
-        Logging must never break ingestion — filesystem errors are swallowed.
+        Logs the model actually used for this call (extraction vs vision), not only
+        `self.model`. Logging must never break ingestion — filesystem errors are swallowed.
         """
         if self.log_path is None:
             return
         record = {
             "timestamp": datetime.now(UTC).isoformat(),
-            "model": self.model,
+            "model": model,
             "host": self.host,
             "prompt_chars": len(user_prompt),
             "duration_ms": round(duration_s * 1000),

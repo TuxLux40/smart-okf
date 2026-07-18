@@ -18,6 +18,7 @@ from pathlib import Path
 
 from app.constants import (
     FOLDER_SUMMARY_OKF_TYPE,
+    IMAGE_DOCUMENT_SUFFIXES,
     LLM_LOG_FILENAME,
     RESERVED_CONCEPT_FILENAMES,
     TRANSCRIPTS_DIR_NAME,
@@ -25,6 +26,7 @@ from app.constants import (
 from app.exceptions import DocumentIngestError, LLMClientError
 from app.models.okf import OKFDocument, OKFFrontmatter
 from app.services.chunking import chunk_text
+from app.services.extraction_options import DEFAULT_EXTRACTION, LIGHT_EXTRACTION, ExtractionOptions
 from app.services.llm_client import LLMClient
 from app.services.text_extraction import extract_text_from_file, is_supported_document
 from app.types import FrontmatterPatch
@@ -101,7 +103,13 @@ def write_transcript(file_path: Path, root: Path, raw_text: str) -> None:
     target.write_text(raw_text, encoding="utf-8")
 
 
-def extract_document(file_path: Path, root: Path, client: LLMClient, *, use_marker: bool = False) -> OKFDocument:
+def extract_document(
+    file_path: Path,
+    root: Path,
+    client: LLMClient,
+    *,
+    options: ExtractionOptions = DEFAULT_EXTRACTION,
+) -> OKFDocument:
     """Extract and structure one document into an OKF document (no aggregate write).
 
     Documents too large for a single LLM call are chunked (`chunk_text`) and extracted
@@ -109,12 +117,15 @@ def extract_document(file_path: Path, root: Path, client: LLMClient, *, use_mark
     document, preserving the one-file-one-aggregate-section invariant regardless of how
     many LLM calls it took.
     """
-    raw_text = extract_text_from_file(file_path, use_marker=use_marker)
+    context = str(file_path.relative_to(root))
+    if file_path.suffix.lower() in IMAGE_DOCUMENT_SUFFIXES and client.vision_model is not None:
+        raw_text = client.describe_image(file_path, context=context)
+    else:
+        raw_text = extract_text_from_file(file_path, options)
     if not raw_text.strip():
         raise DocumentIngestError(f"No extractable text in {file_path}")
     write_transcript(file_path, root, raw_text)
 
-    context = str(file_path.relative_to(root))
     chunks = chunk_text(raw_text)
     documents: list[OKFDocument] = []
     for i, chunk in enumerate(chunks):
@@ -125,23 +136,41 @@ def extract_document(file_path: Path, root: Path, client: LLMClient, *, use_mark
         except Exception as error:
             raise DocumentIngestError(f"Failed to parse OKF markdown for {file_path}") from error
 
-    document = merge_chunk_documents(documents) if len(documents) > 1 else documents[0]
+    document = merge_chunk_documents(documents)
     return apply_ingest_defaults(document, file_path, root)
 
 
 def merge_chunk_documents(documents: list[OKFDocument]) -> OKFDocument:
     """Merge multiple chunk-extracted documents (one file, split across LLM calls) into one.
 
-    Frontmatter identity (type/title/description/timestamp/source) comes from the first
-    chunk, which usually contains the letterhead/subject line; tags union across chunks.
+    Prefer first-chunk identity (letterhead/subject usually lives at the top). Empty
+    title/description/source on the first chunk are filled from later chunks when present.
+    Tags are the ordered union across all chunks. Bodies concatenate in chunk order.
     """
+    if not documents:
+        raise ValueError("merge_chunk_documents requires at least one document")
+    if len(documents) == 1:
+        return documents[0]
+
     tags: list[str] = []
     for document in documents:
         for tag in document.frontmatter.tags:
             if tag not in tags:
                 tags.append(tag)
-    frontmatter = documents[0].frontmatter.model_copy(update={"tags": tags})
-    body = "\n\n".join(document.body for document in documents)
+
+    updates: FrontmatterPatch = {"tags": tags}
+    base = documents[0].frontmatter
+    for field_name in ("title", "description", "source"):
+        if getattr(base, field_name):
+            continue
+        for document in documents[1:]:
+            value = getattr(document.frontmatter, field_name)
+            if value:
+                updates[field_name] = value
+                break
+
+    frontmatter = base.model_copy(update=updates)
+    body = "\n\n".join(document.body for document in documents if document.body.strip())
     return OKFDocument(frontmatter=frontmatter, body=body)
 
 
@@ -188,7 +217,7 @@ def ingest_folder(
     folder: str,
     client: LLMClient | None = None,
     *,
-    use_marker: bool = False,
+    options: ExtractionOptions = DEFAULT_EXTRACTION,
     verbose: bool = False,
 ) -> IngestFolderResult:
     """Ingest supported documents from a folder, writing one aggregate `.md` per subfolder."""
@@ -207,7 +236,7 @@ def ingest_folder(
         p for p in root.rglob("*") if p.is_dir() and not any(part.startswith(".") for part in p.relative_to(root).parts)
     )
     for directory in directories:
-        _ingest_directory(directory, root, llm_client, result, use_marker=use_marker, verbose=verbose)
+        _ingest_directory(directory, root, llm_client, result, options=options, verbose=verbose)
 
     if verbose:
         print(
@@ -224,7 +253,7 @@ def _ingest_directory(
     client: LLMClient,
     result: IngestFolderResult,
     *,
-    use_marker: bool = False,
+    options: ExtractionOptions,
     verbose: bool,
 ) -> None:
     """Ingest the files directly inside one directory (non-recursive) into its aggregate."""
@@ -249,7 +278,8 @@ def _ingest_directory(
         for file_path in files:
             if not transcript_path(file_path, root).exists():
                 with contextlib.suppress(DocumentIngestError):
-                    write_transcript(file_path, root, extract_text_from_file(file_path, use_marker=use_marker))
+                    # Backfill is best-effort and must stay cheap: never shell into marker.
+                    write_transcript(file_path, root, extract_text_from_file(file_path, LIGHT_EXTRACTION))
         if verbose:
             print(f"Unchanged: {directory}")
         return
@@ -265,16 +295,14 @@ def _ingest_directory(
             sections.append(old_sections[file_path.name])
             ingested_files.append(file_path)
             if not transcript_path(file_path, root).exists():
-                # Backfill: local re-extraction is LLM-free, so a missing transcript
-                # (files ingested before the transcript store existed) is cheap to fix.
                 with contextlib.suppress(DocumentIngestError):
-                    write_transcript(file_path, root, extract_text_from_file(file_path, use_marker=use_marker))
+                    write_transcript(file_path, root, extract_text_from_file(file_path, LIGHT_EXTRACTION))
             continue
 
         if verbose:
             print(f"Processing: {file_path}")
         try:
-            document = extract_document(file_path, root, client, use_marker=use_marker)
+            document = extract_document(file_path, root, client, options=options)
         except (DocumentIngestError, LLMClientError) as error:
             result.skipped.append((file_path, str(error)))
             current_hashes.pop(file_path.name, None)

@@ -3,9 +3,11 @@
 from app.constants import (
     DEFAULT_EXTRACTION_PROMPT,
     DEFAULT_FOLDER_SUMMARY_PROMPT,
+    DEFAULT_VISION_EXTRACTION_PROMPT,
     EXTRACTION_PROMPT_FILE,
     FOLDER_SUMMARY_PROMPT_FILE,
     PROMPTS_DIR,
+    VISION_EXTRACTION_PROMPT_FILE,
 )
 
 
@@ -25,3 +27,8 @@ def load_extraction_prompt() -> str:
 def load_folder_summary_prompt() -> str:
     """Load the system prompt used to synthesize a folder aggregate's top summary."""
     return load_prompt(FOLDER_SUMMARY_PROMPT_FILE, fallback=DEFAULT_FOLDER_SUMMARY_PROMPT)
+
+
+def load_vision_extraction_prompt() -> str:
+    """Load the system prompt used to transcribe + describe images via a vision-capable model."""
+    return load_prompt(VISION_EXTRACTION_PROMPT_FILE, fallback=DEFAULT_VISION_EXTRACTION_PROMPT)

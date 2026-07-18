@@ -83,12 +83,12 @@ def test_extract_text_from_eml_reads_headers_and_body(tmp_path: Path) -> None:
     assert "Your appointment is on Friday." in text
 
 
-def test_use_marker_false_never_touches_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Default behavior (use_marker=False) must be unchanged for all existing callers."""
+def test_non_pdf_files_never_touch_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """marker is only ever consulted for .pdf, regardless of ExtractionOptions default."""
     import shutil
 
     def _fail_if_called(*args: object, **kwargs: object) -> None:
-        raise AssertionError("shutil.which must not be called when use_marker=False")
+        raise AssertionError("shutil.which must not be called for non-PDF files")
 
     monkeypatch.setattr(shutil, "which", _fail_if_called)
 
@@ -98,9 +98,8 @@ def test_use_marker_false_never_touches_marker(tmp_path: Path, monkeypatch: pyte
     assert extract_text_from_file(text_path) == "plain text, no marker involved"
 
 
-def test_use_marker_true_raises_clear_error_when_binary_missing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_use_marker_defaults_to_true_for_pdf(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """marker is on by default (opt-out): a PDF call with default options still tries it."""
     import shutil
 
     monkeypatch.setattr(shutil, "which", lambda _name: None)
@@ -108,7 +107,22 @@ def test_use_marker_true_raises_clear_error_when_binary_missing(
     pdf_path.write_bytes(b"%PDF-1.4\n%%EOF")
 
     with pytest.raises(DocumentIngestError, match="marker_single"):
-        extract_text_from_file(pdf_path, use_marker=True)
+        extract_text_from_file(pdf_path)
+
+
+def test_use_marker_true_raises_clear_error_when_binary_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import shutil
+
+    from app.services.extraction_options import ExtractionOptions
+
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    pdf_path = tmp_path / "doc.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%%EOF")
+
+    with pytest.raises(DocumentIngestError, match="marker_single"):
+        extract_text_from_file(pdf_path, ExtractionOptions(use_marker=True))
 
 
 def test_use_marker_true_uses_marker_output_when_binary_present(
@@ -117,6 +131,8 @@ def test_use_marker_true_uses_marker_output_when_binary_present(
     import shutil
     import subprocess
     from pathlib import Path as _Path
+
+    from app.services.extraction_options import ExtractionOptions
 
     monkeypatch.setattr(shutil, "which", lambda _name: "/usr/local/bin/marker_single")
 
@@ -129,6 +145,6 @@ def test_use_marker_true_uses_marker_output_when_binary_present(
     pdf_path = tmp_path / "doc.pdf"
     pdf_path.write_bytes(b"%PDF-1.4\n%%EOF")
 
-    text = extract_text_from_file(pdf_path, use_marker=True)
+    text = extract_text_from_file(pdf_path, ExtractionOptions(use_marker=True))
 
     assert "Extracted table content." in text
