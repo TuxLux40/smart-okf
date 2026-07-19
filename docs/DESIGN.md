@@ -298,13 +298,12 @@ doesn't opt in. Detecting vision capability from a model name alone isn't reliab
 doesn't expose a "vision: true" flag over `/v1/models`), so this is explicit opt-in via
 onboarding/config/flag, never auto-detected.
 
-**Verified against a real photo**
-(`providers/03_Strom/Stromzaehlerstaende/2022-03-03--Zaehlerstand_Quantiusstrasse.jpg`, via
-`qwen3-vl-2b-instruct`): correctly transcribed the meter serial number, tariff type, and the
-`005.137 kWh` reading, and the scene description flagged "a person is visible" without any
-identifying detail, exactly as designed. Note: `qwen3-vl-8b-instruct` crashed LM Studio's Vulkan
-backend (`vk::Queue::submit: ErrorDeviceLost`, likely VRAM pressure on the 8GB RX 7600) on the
-first attempt — a local GPU/driver issue, not a smart-okf bug; the 2B model worked without issue.
+**Verified against a real photo** of a utility meter, via `qwen3-vl-2b-instruct`: correctly
+transcribed the meter serial number, tariff type, and the reading, and the scene description
+flagged "a person is visible" without any identifying detail, exactly as designed. Note:
+`qwen3-vl-8b-instruct` crashed LM Studio's Vulkan backend (`vk::Queue::submit:
+ErrorDeviceLost`, likely VRAM pressure on the 8GB RX 7600) on the first attempt — a local
+GPU/driver issue, not a smart-okf bug; the 2B model worked without issue.
 
 ### 2026-07-19: fable review fixes (8 findings) + dream synthesis pass shipped (R2b v1)
 
@@ -352,6 +351,58 @@ aggregates/transcripts remain the truth — SKILL.md instructs agents to verify 
 aggregates before answering from the synthesis. Explicitly not built: queues, Postgres,
 pgvector, idle-timers, peers — cron/on-demand invocation replaces all of them. Per-matter
 concept files (R2 proper) stay on the roadmap for when one synthesis file isn't enough.
+
+### 2026-07-19: dream pass v2 — two-pass deep dive for fact-dense matters
+
+**Problem, surfaced by a real reference document.** The user shared a genuinely excellent
+investigative case report they'd previously had an agent write by hand (full case
+chronology, exact meter/contract/account numbers, a payment ledger, per-recipient action
+items) as the target quality bar for dreaming. Comparing it against v1's actual output
+exposed the real gap: `build_digest()` deliberately strips section bodies down to headings
+only, so the dreamer's input never contains the amounts/dates/reference numbers that make a
+Matters write-up dense — no amount of prompt tuning fixes an input that doesn't carry the
+facts. That investigative report is also a structurally different artifact (a full
+chronological single-matter narrative with tables and diagrams, built from raw
+transcripts+correspondence, not a four-section cross-tree map) — not a realistic one-shot
+target for a compact synthesis pass, but its *density and citation discipline* were exactly
+right as a bar to raise the Matters/Conflicts sections toward.
+
+**Design decision — two passes, cost bounded by matters found, not tree size.** Two options
+were on the table: enrich the single digest-based pass (simpler, but O(tree) cost for every
+run regardless of whether anything correlates), or a cheap-scan-then-deep-dive split. Chose
+the split:
+
+1. **Cheap scan** (unchanged from v1): one call over compact digests across the whole tree,
+   producing a baseline four-section report. Still the only work done when nothing
+   correlates.
+2. **Free grouping** (`app/services/matter_grouping.py`, no LLM call): union-find over
+   5+ digit numeric tokens found in digest text (filenames, tags, titles, summaries —
+   whichever already carry an ID; real-world source filenames like
+   `..._999888777_...pdf` put the account number right in the digest for free). Aggregates
+   sharing a token become a candidate group. Singletons are dropped — nothing to correlate,
+   and the cheap scan already covers them for Patterns.
+3. **Deep dive** (`prompts/dream_matter.md`, `LLMClient.dream_matter()`): only candidate
+   groups get a follow-up call that reads their **full** aggregate markdown (not digest) and
+   produces three labeled sections (Matter/Conflicts/Actions) with exact identifiers and
+   explicit logical-incompatibility reasoning ("two suppliers can't both exclusively supply
+   the same meter for the same period — at most one billing is correct"). Batches +
+   consolidates like the cheap scan when a matter's evidence is itself oversized.
+
+Splicing (`_apply_deep_dives`): deep-dive output replaces the baseline's Matters/Conflicts
+sections (parsed via `_split_sections`/`_join_sections`) and merges into Open actions;
+Patterns always stays from the cheap scan — cross-tree trends don't need per-fact depth, and
+keeping one section cheap-scan-only bounds worst-case cost. If the baseline didn't parse
+into recognizable sections at all (small-model format drift), splicing is skipped entirely
+and the baseline ships as-is — never risk losing content to a fragile parse.
+
+**No regression when nothing correlates**: zero shared tokens anywhere → `groups` is empty →
+`_apply_deep_dives` returns the baseline body unchanged, byte-for-byte v1 behavior, zero
+extra LLM calls. Verified by a dedicated test asserting `matter_calls == []` on the existing
+no-shared-tokens fixture.
+
+Real personal content from the reference document (names, addresses, exact figures) is not
+reproduced anywhere in this repo — same "no personal case names published" rule as always;
+only the structural/density lessons went into the prompt.
 
 ---
 

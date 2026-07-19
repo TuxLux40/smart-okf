@@ -58,6 +58,14 @@ DEFAULT_DREAM_SYNTHESIS_PROMPT = (
     "Cite aggregate paths for every claim; keep identifiers verbatim; body only, no frontmatter."
 )
 
+DREAM_MATTER_PROMPT_FILE = "dream_matter.md"
+DEFAULT_DREAM_MATTER_PROMPT = (
+    "You investigate one candidate cross-folder matter (aggregates sharing a reference "
+    "number) using their full text. Output exactly three sections: '### Matter' (dense "
+    "paragraph, every identifier verbatim), '### Conflicts' (contradictions, cite both "
+    "sides), '### Actions' (concrete next steps). Cite aggregate paths for every claim."
+)
+
 VISION_EXTRACTION_PROMPT_FILE = "vision_extraction.md"
 DEFAULT_VISION_EXTRACTION_PROMPT = (
     "Transcribe all legible text in this image verbatim, including handwriting and numbers. "

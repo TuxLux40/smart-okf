@@ -25,6 +25,7 @@ from app.constants import (
 )
 from app.exceptions import LLMClientError
 from app.services.prompts import (
+    load_dream_matter_prompt,
     load_dream_synthesis_prompt,
     load_extraction_prompt,
     load_folder_summary_prompt,
@@ -215,3 +216,12 @@ class LLMClient:
         """
         system_prompt = load_dream_synthesis_prompt()
         return self.chat(system_prompt, digest, max_tokens=max_tokens)
+
+    def dream_matter(self, group_text: str, *, max_tokens: int | None = None) -> str:
+        """Deep-dive one candidate cross-folder matter using full aggregate text (not digests).
+
+        Only called for candidate groups a cheap non-LLM pre-filter already found sharing a
+        reference number (`app/services/matter_grouping.py`) — bounded cost, not O(aggregates).
+        """
+        system_prompt = load_dream_matter_prompt()
+        return self.chat(system_prompt, group_text, max_tokens=max_tokens)

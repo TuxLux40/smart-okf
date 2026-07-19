@@ -291,13 +291,21 @@ cd /path/to/smart-okf
 uv run python scripts/dream.py /path/to/documents
 ```
 
-- Reads a compact digest of **every** folder aggregate (identity, tags, orientation summary,
-  section headings — not full bodies) and writes one `<root>/synthesis.md`
-  (`type: Synthesis`) with exactly four sections: **Matters** (same real-world affair across
-  folders, joined by IDs), **Conflicts** (contradicting dates/amounts/statuses between
-  aggregates), **Patterns**, **Open actions**.
+- Writes one `<root>/synthesis.md` (`type: Synthesis`) with exactly four sections:
+  **Matters** (same real-world affair across folders, joined by IDs), **Conflicts**
+  (contradicting dates/amounts/statuses between aggregates), **Patterns**, **Open actions**.
+- **Two passes.** A cheap scan reads a compact digest of **every** aggregate (identity,
+  tags, orientation summary, section headings — not full bodies) and produces a baseline
+  report. A free, non-LLM pre-filter then groups aggregates that share a reference number
+  (contract/customer/meter/case ID — 5+ digit runs, matched in filenames/tags/summaries) into
+  candidate matters; only those candidate groups get a follow-up call that reads their
+  **full** aggregate text and replaces the baseline's Matters/Conflicts for that part of the
+  report with fact-dense, ID-exact write-ups (Patterns always stays cheap-scan). Cost scales
+  with the number of candidate groups, not tree size. No shared reference numbers anywhere →
+  identical to the cheap-scan-only baseline, zero extra cost.
 - **Incremental like ingest**: aggregate hashes live in the synthesis frontmatter; when no
-  aggregate changed since the last dream, zero LLM calls. `--force` re-dreams anyway.
+  aggregate changed since the last dream, zero LLM calls — including the deep-dive pass.
+  `--force` re-dreams anyway.
 - **Dreamer model is its own choice** (`dream_model`/`dream_host` in config,
   `SMART_OKF_DREAM_MODEL`/`SMART_OKF_DREAM_HOST`, or `--model`/`--host`): falls back to the
   extractor model when unset, but reasoning quality scales with model size here more than

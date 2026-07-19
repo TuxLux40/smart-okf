@@ -8,12 +8,27 @@ root-level `synthesis.md` (`type: Synthesis`).
 
 Incremental like ingest: the synthesis stores a SHA-256 per source aggregate in its
 frontmatter. When no aggregate changed since the last dream, the pass makes zero LLM
-calls. The digest fed to the model is deliberately compact (frontmatter identity +
-orientation summary + section headings), not full aggregate bodies — the aggregates
-already are the distilled form; dreaming reasons across them, it does not re-read
-everything.
+calls.
+
+Two passes, bounded cost:
+
+1. **Cheap scan** (`_synthesize`): one call (or a few, batched) over compact per-aggregate
+   digests (identity, tags, orientation summary, section headings — not full bodies) across
+   the *entire* tree. Produces a baseline four-section report. This alone is what shipped
+   first; it is cheap because digests are small, but it cannot cite exact amounts/dates/IDs
+   that only live in aggregate section bodies, which digests deliberately exclude.
+2. **Deep dive** (`_deep_dive`): a non-LLM pre-filter (`app/services/matter_grouping.py`)
+   groups aggregates that share a probable reference number (contract/customer/meter/case
+   ID) — a purely local, free heuristic. Only those candidate *groups* get a follow-up call
+   that reads their **full** aggregate text and produces a fact-dense Matter/Conflicts/Actions
+   write-up. Cost scales with the number of candidate groups, not tree size. When a matter
+   group exists, its deep-dive output replaces the cheap scan's Matters/Conflicts for that
+   part of the report and its Actions merge in; Patterns always comes from the cheap scan
+   (cross-cutting trends don't need forensic-level facts). When no groups are found, output
+   is identical to the cheap-scan-only baseline — no regression, no extra cost.
 """
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -28,9 +43,15 @@ from app.exceptions import LLMClientError
 from app.models.okf import OKFDocument, OKFFrontmatter
 from app.services.ingest import hash_file, load_existing_summary
 from app.services.llm_client import LLMClient
+from app.services.matter_grouping import group_by_shared_tokens
 
 DREAM_MAX_TOKENS = 4096
 """Synthesis is longer-form than per-document extraction; give it more output room."""
+
+_SYNTHESIS_HEADERS = ("Matters", "Conflicts", "Patterns", "Open actions")
+_SYNTHESIS_SECTION_PATTERN = re.compile(r"^##\s+(" + "|".join(_SYNTHESIS_HEADERS) + r")\s*$", re.MULTILINE)
+_MATTER_SECTION_PATTERN = re.compile(r"^###\s+(Matter|Conflicts|Actions)\s*$", re.IGNORECASE | re.MULTILINE)
+_NO_CONFLICTS_MARKERS = ("keine konflikte erkannt", "no conflicts detected")
 
 
 @dataclass
@@ -138,13 +159,17 @@ def dream(
             print(f"Unchanged: no aggregate changed since last dream ({output_path})")
         return result
 
-    digests = [digest for path in aggregates if (digest := build_digest(path, root))]
+    digest_map = {path: digest for path in aggregates if (digest := build_digest(path, root))}
     if verbose:
-        print(f"Dreaming over {len(digests)} aggregate(s)...")
+        print(f"Dreaming over {len(digest_map)} aggregate(s)...")
 
     llm_client = client or LLMClient(log_path=root / LLM_LOG_FILENAME)
     try:
-        body = _synthesize(digests, llm_client)
+        baseline_body = _synthesize(list(digest_map.values()), llm_client)
+        groups = group_by_shared_tokens(digest_map)
+        if verbose and groups:
+            print(f"  {len(groups)} candidate matter group(s) found — deep-diving...")
+        body = _apply_deep_dives(baseline_body, groups, root, llm_client, verbose=verbose)
     except LLMClientError as error:
         result.errors.append(f"dream synthesis failed: {error}")
         return result
@@ -209,3 +234,109 @@ def _batch_digests(digests: list[str], budget: int) -> list[str]:
     if current:
         batches.append("\n\n".join(current))
     return batches
+
+
+def _apply_deep_dives(
+    baseline_body: str, groups: list[list[Path]], root: Path, client: LLMClient, *, verbose: bool
+) -> str:
+    """Splice deep-dive Matter/Conflicts/Actions into the cheap-scan baseline report.
+
+    Patterns always comes from the baseline (cross-cutting trends don't need per-fact
+    depth). If the baseline didn't parse into recognizable sections at all (a small model
+    deviated from the format), skip splicing entirely rather than risk losing content —
+    the baseline body ships as-is, same as before this feature existed.
+    """
+    if not groups:
+        return baseline_body
+
+    sections = _split_sections(baseline_body)
+    if not any(sections.values()):
+        return baseline_body
+
+    matter_blocks: list[str] = []
+    conflict_blocks: list[str] = []
+    action_blocks: list[str] = []
+    for group in groups:
+        if verbose:
+            print(f"    Deep dive: {', '.join(str(p.relative_to(root)) for p in group)}")
+        raw = _deep_dive(group, root, client)
+        matter, conflicts, actions = _parse_matter_sections(raw)
+        if matter:
+            matter_blocks.append(matter)
+        if conflicts and conflicts.strip().lower() not in _NO_CONFLICTS_MARKERS:
+            conflict_blocks.append(conflicts)
+        if actions:
+            action_blocks.append(actions)
+
+    if matter_blocks:
+        sections["Matters"] = "\n\n".join(matter_blocks)
+    if conflict_blocks:
+        sections["Conflicts"] = "\n\n".join(conflict_blocks)
+    if action_blocks:
+        existing_actions = sections.get("Open actions", "")
+        sections["Open actions"] = "\n\n".join(filter(None, [existing_actions, *action_blocks]))
+
+    return _join_sections(sections)
+
+
+def _deep_dive(group: list[Path], root: Path, client: LLMClient) -> str:
+    """Run one matter deep-dive over a candidate group's full aggregate text.
+
+    Batches + consolidates like `_synthesize` when the group's combined text exceeds the
+    character budget — rare, most matters span a handful of files, but a real dispute can
+    easily involve a dozen+ documents across several folders.
+    """
+    parts = [f"=== {path.relative_to(root)} ===\n{path.read_text(encoding='utf-8')}" for path in group]
+    batches = _batch_digests(parts, CHUNK_CHAR_THRESHOLD)
+    if len(batches) == 1:
+        return client.dream_matter(batches[0], max_tokens=DREAM_MAX_TOKENS)
+
+    partials = [
+        client.dream_matter(
+            f"(Partial evidence {i + 1}/{len(batches)} for this candidate matter.)\n\n{batch}",
+            max_tokens=DREAM_MAX_TOKENS,
+        )
+        for i, batch in enumerate(batches)
+    ]
+    consolidation_input = "\n\n---\n\n".join(
+        f"(Partial write-up {i + 1}/{len(partials)})\n\n{partial}" for i, partial in enumerate(partials)
+    )
+    return client.dream_matter(
+        "The following are partial Matter/Conflicts/Actions write-ups for the SAME candidate "
+        "matter, each from a different subset of its evidence. Merge them into one coherent "
+        f"set of three sections, deduplicating repeated facts.\n\n{consolidation_input}",
+        max_tokens=DREAM_MAX_TOKENS,
+    )
+
+
+def _parse_matter_sections(text: str) -> tuple[str, str, str]:
+    """Split a deep-dive response into (matter, conflicts, actions).
+
+    Tolerant of missing/malformed headers (small local models aren't always reliable) —
+    everything falls into `matter` rather than being silently dropped.
+    """
+    matches = list(_MATTER_SECTION_PATTERN.finditer(text))
+    if not matches:
+        return text.strip(), "", ""
+    sections: dict[str, str] = {}
+    for i, match in enumerate(matches):
+        start = match.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        sections[match.group(1).lower()] = text[start:end].strip()
+    return sections.get("matter", ""), sections.get("conflicts", ""), sections.get("actions", "")
+
+
+def _split_sections(body: str) -> dict[str, str]:
+    """Split a synthesis body into its four named sections (empty string if absent)."""
+    matches = list(_SYNTHESIS_SECTION_PATTERN.finditer(body))
+    sections = dict.fromkeys(_SYNTHESIS_HEADERS, "")
+    for i, match in enumerate(matches):
+        start = match.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
+        sections[match.group(1)] = body[start:end].strip()
+    return sections
+
+
+def _join_sections(sections: dict[str, str]) -> str:
+    """Reassemble a sections dict back into one markdown body, dropping empty sections."""
+    return "\n\n".join(f"## {header}\n\n{sections[header]}" for header in _SYNTHESIS_HEADERS if sections[header])
