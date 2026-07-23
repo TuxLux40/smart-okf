@@ -26,6 +26,13 @@ Two passes, bounded cost:
    part of the report and its Actions merge in; Patterns always comes from the cheap scan
    (cross-cutting trends don't need forensic-level facts). When no groups are found, output
    is identical to the cheap-scan-only baseline — no regression, no extra cost.
+
+Each deep-dived group is also persisted as its own concept file under `<root>/matters/`
+(R2, `app/services/matter_files.py`, `type: Matter`) — a stable, linkable file per matter
+rather than only a paragraph inside whatever `synthesis.md` happens to be current.
+Hash-incremental per matter: a group whose own aggregates are unchanged reuses its existing
+matter file instead of re-running the deep-dive call, even when an unrelated aggregate
+elsewhere triggered this dream run.
 """
 
 import re
@@ -43,7 +50,14 @@ from app.exceptions import LLMClientError
 from app.models.okf import OKFDocument, OKFFrontmatter
 from app.services.ingest import hash_file, load_existing_summary
 from app.services.llm_client import LLMClient
-from app.services.matter_grouping import group_by_shared_tokens
+from app.services.matter_files import (
+    group_source_hashes,
+    load_matter_body,
+    matter_path,
+    matter_unchanged,
+    write_matter_file,
+)
+from app.services.matter_grouping import group_by_shared_tokens, group_tokens
 
 DREAM_MAX_TOKENS = 4096
 """Synthesis is longer-form than per-document extraction; give it more output room."""
@@ -169,7 +183,7 @@ def dream(
         groups = group_by_shared_tokens(digest_map)
         if verbose and groups:
             print(f"  {len(groups)} candidate matter group(s) found — deep-diving...")
-        body = _apply_deep_dives(baseline_body, groups, root, llm_client, verbose=verbose)
+        body = _apply_deep_dives(baseline_body, groups, digest_map, root, llm_client, verbose=verbose)
     except LLMClientError as error:
         result.errors.append(f"dream synthesis failed: {error}")
         return result
@@ -237,9 +251,20 @@ def _batch_digests(digests: list[str], budget: int) -> list[str]:
 
 
 def _apply_deep_dives(
-    baseline_body: str, groups: list[list[Path]], root: Path, client: LLMClient, *, verbose: bool
+    baseline_body: str,
+    groups: list[list[Path]],
+    digest_map: dict[Path, str],
+    root: Path,
+    client: LLMClient,
+    *,
+    verbose: bool,
 ) -> str:
     """Splice deep-dive Matter/Conflicts/Actions into the cheap-scan baseline report.
+
+    Also persists each group's write-up as its own concept file under `<root>/matters/`
+    (R2, `app/services/matter_files.py`) and, per group, skips the deep-dive LLM call
+    entirely when that group's own source hashes already match its existing matter file —
+    hash-incremental per matter, not just per whole-tree synthesis.
 
     Patterns always comes from the baseline (cross-cutting trends don't need per-fact
     depth). If the baseline didn't parse into recognizable sections at all (a small model
@@ -257,9 +282,18 @@ def _apply_deep_dives(
     conflict_blocks: list[str] = []
     action_blocks: list[str] = []
     for group in groups:
-        if verbose:
-            print(f"    Deep dive: {', '.join(str(p.relative_to(root)) for p in group)}")
-        raw = _deep_dive(group, root, client)
+        tokens = group_tokens(group, digest_map)
+        current_hashes = group_source_hashes(group, root)
+        existing_path = matter_path(root, tokens, group)
+        if matter_unchanged(existing_path, current_hashes):
+            if verbose:
+                print(f"    Matter unchanged, reusing: {existing_path.relative_to(root)}")
+            raw = load_matter_body(existing_path) or ""
+        else:
+            if verbose:
+                print(f"    Deep dive: {', '.join(str(p.relative_to(root)) for p in group)}")
+            raw = _deep_dive(group, root, client)
+            write_matter_file(root, group, tokens, raw)
         matter, conflicts, actions = _parse_matter_sections(raw)
         if matter:
             matter_blocks.append(matter)

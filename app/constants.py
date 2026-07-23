@@ -51,6 +51,15 @@ SYNTHESIS_OKF_TYPE = "Synthesis"
 SYNTHESIS_FILENAME = "synthesis.md"
 """Root-level output of the dream pass: matters, conflicts, patterns, open actions."""
 
+MATTER_OKF_TYPE = "Matter"
+"""Frontmatter `type` for a dedicated per-matter concept file (R2): one persistent, hash-
+incremental file per cross-folder matter group, linking the aggregates that share a
+reference number. Distinct from `Synthesis`, which is the whole-tree map."""
+
+MATTERS_DIR_NAME = "matters"
+"""Root-level, non-hidden folder holding one `.md` per matter group — a real user-facing
+concept (unlike `.okf-transcripts/`), so it stays visible."""
+
 DREAM_SYNTHESIS_PROMPT_FILE = "dream_synthesis.md"
 DEFAULT_DREAM_SYNTHESIS_PROMPT = (
     "You synthesize a digest of folder aggregates into one cross-folder report with exactly "

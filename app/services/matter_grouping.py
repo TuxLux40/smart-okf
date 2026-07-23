@@ -63,3 +63,20 @@ def group_by_shared_tokens(digests: dict[Path, str]) -> list[list[Path]]:
         groups.setdefault(find(path), []).append(path)
 
     return [sorted(members, key=str) for members in groups.values() if len(members) > 1]
+
+
+def group_tokens(group: list[Path], digests: dict[Path, str]) -> list[str]:
+    """Return the numeric tokens shared by 2+ members of this specific group, sorted.
+
+    A group can form via a token chain (A-B share token1, B-C share token2) without A and
+    C sharing anything directly. Both tokens still identify the group for naming purposes,
+    so this recounts token occurrences confined to `group`'s own members rather than reusing
+    `group_by_shared_tokens`'s global union-find state. Used to build a stable, human-legible
+    slug for the matter's persisted file (`app/services/matter_files.py`) — stable across
+    dream reruns as long as the same aggregates keep sharing the same token.
+    """
+    counts: dict[str, int] = {}
+    for path in group:
+        for token in extract_numeric_tokens(digests.get(path, "")):
+            counts[token] = counts.get(token, 0) + 1
+    return sorted(token for token, count in counts.items() if count > 1)

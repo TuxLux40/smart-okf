@@ -229,13 +229,56 @@ def test_split_and_join_sections_round_trip() -> None:
     assert _join_sections(sections) == body
 
 
+def test_dream_writes_a_dedicated_matter_file_for_a_candidate_group(tmp_path: Path) -> None:
+    _build_tree_with_shared_filename_token(tmp_path)
+    client = _TwoPassStub()
+
+    result = dream(str(tmp_path), client=client)  # type: ignore[arg-type]
+
+    assert result.errors == []
+    matter_files = list((tmp_path / "matters").glob("*.md"))
+    assert len(matter_files) == 1
+    content = matter_files[0].read_text(encoding="utf-8")
+    assert "type: Matter" in content
+    assert "999888777" in content
+    assert "Dense matter write-up citing exact contract 999888777" in content
+    assert "providers/providers.md" in content  # involved-aggregates link
+
+
+def test_dream_reuses_matter_file_and_skips_deep_dive_when_group_unchanged(tmp_path: Path) -> None:
+    _build_tree_with_shared_filename_token(tmp_path)
+    dream(str(tmp_path), client=_TwoPassStub())  # type: ignore[arg-type]
+
+    # Unrelated change elsewhere still forces a full dream rerun (synthesis-level hash
+    # differs), but the matter group itself is untouched — its deep dive must be skipped.
+    (tmp_path / "health").mkdir()
+    (tmp_path / "health" / "note.txt").write_text("dentist visit", encoding="utf-8")
+    ingest_folder(str(tmp_path), client=_IngestStub())  # type: ignore[arg-type]
+
+    rerun_client = _TwoPassStub()
+    result = dream(str(tmp_path), client=rerun_client)  # type: ignore[arg-type]
+
+    assert result.errors == []
+    assert result.unchanged is False  # the new health/ aggregate did change the tree overall
+    assert rerun_client.matter_calls == []  # matter group's own aggregates unchanged
+    output = synthesis_path(tmp_path).read_text(encoding="utf-8")
+    assert "Dense matter write-up citing exact contract 999888777" in output
+
+
 def test_apply_deep_dives_skips_splicing_when_baseline_unparseable(tmp_path: Path) -> None:
     from app.services.dream import _apply_deep_dives
 
     client = _TwoPassStub()
     unparseable_baseline = "The model ignored the format and just wrote free prose."
 
-    result = _apply_deep_dives(unparseable_baseline, [[tmp_path / "a.md"]], tmp_path, client, verbose=False)  # type: ignore[arg-type]
+    result = _apply_deep_dives(
+        unparseable_baseline,
+        [[tmp_path / "a.md"]],
+        {},
+        tmp_path,
+        client,  # type: ignore[arg-type]
+        verbose=False,
+    )
 
     assert result == unparseable_baseline
     assert client.matter_calls == []  # never even attempted — nothing safe to splice into

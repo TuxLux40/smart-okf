@@ -174,6 +174,8 @@ types gracefully:
 | `Index` | A directory listing (`index.md`) |
 | `Insight` | Derived/inductive conclusion (Dream pass, optional/later) |
 | `Pattern` | Cross-document pattern or abstraction (Dream pass, optional/later) |
+| `Synthesis` | Root-level whole-tree dream output (`synthesis.md`) — matters, conflicts, patterns, open actions |
+| `Matter` | Root-level per-matter concept file (`matters/<slug>.md`, R2) — one persistent, hash-incremental file per cross-folder matter group sharing a reference number |
 
 Add project-specific types as needed; do not enforce an enum.
 

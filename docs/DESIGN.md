@@ -95,9 +95,37 @@ hosts for full document trees without careful filtering.
 `*.md`), example remotes, and how Claude web / other agents attach to a private repo or MCP-
 wrapped clone — see README §"Remote access via git".
 
-#### PR R2: Cross-folder consolidation pass
+#### PR R2: Cross-folder consolidation pass — **shipped 2026-07-23**
 
-**Principle (2026-07-18):** **git = ingest/version timeline; MD = current distilled truth.**
+**Shipped as part of the dream pass, not a separate ingest-time consolidation pass.** By the
+time this was built, `scripts/dream.py` (R2b) already computed everything the design sketch
+below needed: `app/services/matter_grouping.py`'s free, non-LLM grouping of aggregates
+sharing a 5+ digit reference number, and a deep-dive LLM call (`dream_matter()`) that reads a
+candidate group's full aggregate text and produces a Matter/Conflicts/Actions write-up. R2's
+actual job was just to **persist that write-up as its own concept file** instead of only
+splicing it into whatever `synthesis.md` happens to be current:
+
+- `app/services/matter_files.py` (new): `write_matter_file()` writes
+  `<root>/matters/<slug>.md` (`type: Matter`, new value added to `docs/OKF_SPEC.md`'s type
+  table) with an "Involved aggregates" link list plus the deep-dive's own `### Matter` /
+  `### Conflicts` / `### Actions` headings verbatim. `matter_slug()` names the file after the
+  group's shared reference number(s) (`matter-999888777`), falling back to a short hash of
+  the member paths in the (expected-never) case a group carries no token at all.
+- **Hash-incremental per matter, not just per whole-tree synthesis.** The synthesis's own
+  incremental gate is whole-tree: any changed aggregate anywhere reruns every deep dive.
+  Each matter file now stores its own group's source hashes in frontmatter
+  (`app/services/matter_grouping.group_tokens()` + `matter_files.group_source_hashes()`), so
+  `dream()`'s `_apply_deep_dives()` skips the (expensive, full-aggregate-text) deep-dive call
+  for a group whose own aggregates are unchanged even when an unrelated aggregate elsewhere
+  triggered the run — reusing the existing matter file's stored body instead.
+- No feature flag, on by default: the deep-dive call was already happening for candidate
+  groups (R2b); persisting its output as a file costs nothing extra, so there was no reason
+  to gate it behind `features.cross_folder_consolidation` as the original design sketch
+  proposed. No new prompt (`prompts/cross_reference.md` was never needed) and no wiring into
+  `ingest_folder()` — the consolidation happens at dream time, where the grouping and
+  deep-dive infrastructure already lives.
+
+**Original design sketch (2026-07-18, superseded by the above):** **git = ingest/version timeline; MD = current distilled truth.**
 Agents should use `git log` / commit batches for “what landed together,” not changelogs inside
 aggregates. R2 is only for matters that span folders when **batch correlation is not enough**
 (same case across uploads months apart). Prefer whole-tree search + git history first.
@@ -403,6 +431,34 @@ no-shared-tokens fixture.
 Real personal content from the reference document (names, addresses, exact figures) is not
 reproduced anywhere in this repo — same "no personal case names published" rule as always;
 only the structural/density lessons went into the prompt.
+
+### 2026-07-23: per-matter concept files shipped (R2)
+
+**Problem.** `synthesis.md` (R2b) is regenerated wholesale on every dream run — a good
+whole-tree map, but a bad way to point at "the ACME-Energy dispute" as a stable, linkable
+thing, and its whole-tree incremental gate means any changed aggregate anywhere reruns
+*every* candidate group's deep dive, even ones whose own evidence didn't change.
+
+**Shipped:** `app/services/matter_files.py` persists each dream deep-dive as its own
+concept file, `<root>/matters/<slug>.md` (`type: Matter`, added to `docs/OKF_SPEC.md`'s type
+table), containing an "Involved aggregates" link list plus the deep dive's own
+Matter/Conflicts/Actions write-up verbatim. `app/services/matter_grouping.group_tokens()`
+recovers the specific reference number(s) that formed a given candidate group (a group can
+form via a token chain — A-B share token1, B-C share token2 — so both tokens still identify
+it) to build a stable, human-legible slug (`matter-999888777`).
+
+**Per-matter hash-incrementality, not just whole-tree.** `dream()`'s `_apply_deep_dives()`
+now checks each group's own source hashes against its existing matter file before calling
+`dream_matter()`; unchanged groups reuse their stored file (reparsed with the same
+`_parse_matter_sections()` used for a fresh deep dive) instead of re-running the LLM call —
+so an unrelated aggregate changing elsewhere no longer forces every matter to be re-derived.
+
+No feature flag: the deep-dive call already ran for every candidate group (R2b); writing its
+output to a file besides splicing it into the synthesis costs nothing extra, so gating it
+behind config would have added a decision point with no real tradeoff behind it. See
+[Roadmap](../README.md#roadmap) PR R2 for the full before/after against the original
+2026-07-18 design sketch (an ingest-time consolidation pass, `app/services/consolidate.py`)
+that this superseded.
 
 ---
 

@@ -126,13 +126,14 @@ vector DB: it is **whole-tree ripgrep + read + git**, with an explicit fallback 
 | Step | Where | Use for |
 |------|--------|---------|
 | 0 | **Synthesis** (`<root>/synthesis.md`, `type: Synthesis`) | Cross-folder matters, conflicts, patterns, open actions — check first for any question that could span folders; it names the aggregates to read next |
+| 0.5 | **Matter files** (`<root>/matters/*.md`, `type: Matter`) | A specific cross-folder case already resolved to a dedicated file — check here when the synthesis or a shared ID points at one before reading every cited aggregate |
 | 1 | **Aggregates** (`**/*.md` with `type: FolderSummary`) | Distilled facts, tags, orientation summary, provenance — **always start here** for folder-level facts |
 | 2 | **Transcripts (mandatory fallback)** (`.okf-transcripts/`) | When MD is thin, partial, or missing a full ID/amount/quote — search here **before** re-ingest or guessing. Hidden folder; greppable; lossless raw extract |
 | 3 | **Git history** | “What’s new,” same-batch uploads, ID-tagged commits months later |
 | 4 | **JSONL** (`.okf-llm-log.jsonl`) | Ingest debugging only — **not** knowledge retrieval |
 
-Step 0 exists only after a dream pass has run (see **Dreaming** below); if `synthesis.md` is
-missing or older than recent ingests, offer to run it.
+Steps 0 and 0.5 exist only after a dream pass has run (see **Dreaming** below); if
+`synthesis.md` is missing or older than recent ingests, offer to run it.
 
 **Transcripts are not optional polish.** Ingest always writes them so agents never need to re-OCR for exact strings. If step 1 does not fully answer the question, you **must** run step 2.
 
@@ -210,8 +211,9 @@ git -C /path/to/documents diff HEAD~1 -- '*.md'
 git -C /path/to/documents log --grep='123456789' -i
 ```
 
-Root-level “one matter” files (**R2**) only when the same case spans folders **and** neither
-batch commits nor shared IDs are enough.
+Root-level per-matter files (**R2**, `<root>/matters/<slug>.md`) are written automatically by
+the dream pass for any candidate group sharing a reference number — see **Dreaming** below.
+Batch commits + shared IDs still matter for cases the free grouping pre-filter misses.
 
 **Remote / web agents:** push to a **private** remote (Gitea, GitLab, …); they read `.md` +
 git history, not raw PDFs. MCP is optional glue on a clone. See
@@ -303,9 +305,15 @@ uv run python scripts/dream.py /path/to/documents
   report with fact-dense, ID-exact write-ups (Patterns always stays cheap-scan). Cost scales
   with the number of candidate groups, not tree size. No shared reference numbers anywhere →
   identical to the cheap-scan-only baseline, zero extra cost.
-- **Incremental like ingest**: aggregate hashes live in the synthesis frontmatter; when no
-  aggregate changed since the last dream, zero LLM calls — including the deep-dive pass.
-  `--force` re-dreams anyway.
+- **Each candidate group also gets its own file** — `<root>/matters/<slug>.md`
+  (`type: Matter`), linking the involved aggregates plus the same deep-dive write-up. A
+  stable, linkable concept per matter instead of only a paragraph in whichever `synthesis.md`
+  happens to be current (this is **R2**; see step 0.5 below).
+- **Incremental like ingest, per matter too**: aggregate hashes live in the synthesis
+  frontmatter (whole-tree gate) *and* in each matter file's own frontmatter (per-matter gate)
+  — a matter whose own aggregates are unchanged reuses its existing file and skips the
+  deep-dive call even when an unrelated aggregate elsewhere triggered the run. `--force`
+  re-dreams the whole tree anyway.
 - **Dreamer model is its own choice** (`dream_model`/`dream_host` in config,
   `SMART_OKF_DREAM_MODEL`/`SMART_OKF_DREAM_HOST`, or `--model`/`--host`): falls back to the
   extractor model when unset, but reasoning quality scales with model size here more than
