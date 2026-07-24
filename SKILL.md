@@ -38,6 +38,13 @@ document root (a different share, a different archive) is expected and does not 
 first root's config. This is a conversation you conduct, not a script to invoke — walk the
 user through it, don't dump all the questions at once.
 
+**State the walk-up result out loud before asking anything** — one line: which directory you
+resolved as the root, and whether a `.git` repo was found there (existing repo → will be
+reused as-is, nothing gets initialized or overwritten; no repo → will offer `git init` in step
+6). This is the single most common source of user anxiety here — "will my existing repo get
+clobbered?" — so say it up front instead of leaving them to infer it from which bash commands
+run.
+
 **Two roles (say this once early — it answers "why a local model if Claude is driving?"):**
 
 - **Orchestrator** = you (Claude Code / OpenWebUI / Hermes / cron): decide when to ingest and
@@ -127,11 +134,14 @@ do not re-read every original PDF for facts that were already distilled.
    git -C /path/to/documents rev-parse --is-inside-work-tree
    ```
 
-   If that fails, offer to `git init` it (and a first commit of whatever's already there).
-   This is not optional polish: git is the version timeline the retrieval ladder (step 3) and
-   Change tracking rely on — without a repo here, "what changed since the last ingest" and
-   "find this ID months later" have no history to search. Skip only if the user explicitly
-   already tracks the tree elsewhere and tells you so.
+   If that **succeeds**, say so explicitly ("found existing git repo at `<root>` — reusing it,
+   nothing will be re-initialized or overwritten") and move on to step 7; never run `git init`
+   in this branch. If it **fails**, say that too ("no git repo found at `<root>`") before
+   offering to `git init` it (and a first commit of whatever's already there) — this is not
+   optional polish: git is the version timeline the retrieval ladder (step 3) and Change
+   tracking rely on — without a repo here, "what changed since the last ingest" and "find this
+   ID months later" have no history to search. Skip only if the user explicitly already tracks
+   the tree elsewhere and tells you so.
 
 7. **Ask which archival ordering principle governs** (`ordering_principle`, see
    [docs/ARCHIVAL_PRINCIPLES.md](docs/ARCHIVAL_PRINCIPLES.md)). Both the per-folder aggregate
