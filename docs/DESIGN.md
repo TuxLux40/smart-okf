@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Author** | Oliver (homelab maintainer) |
+| **Author** | TuxLux40 (homelab maintainer) + Claude |
 | **Reviewers** | Design review pass 1 (2026-07-16) |
 | **Date** | 2026-07-16 |
 | **Version** | 0.4 (re-review round 2) |
