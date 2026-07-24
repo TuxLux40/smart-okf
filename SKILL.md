@@ -24,12 +24,19 @@ Three operations: **onboarding** (first run only), **ingest** (build/refresh the
 
 Config lives *inside* each document root (`<root>/.smart-okf/config.yaml`), not in the skill
 repo — one config per root, so it travels with that tree (e.g. over a private git remote)
-instead of staying behind on this machine. If the user's document root has no
-`.smart-okf/config.yaml` yet, run this interview before doing anything else. Each root is
-onboarded independently — running this again for a second, unrelated document root (a
-different share, a different archive) is expected and does not touch the first root's config.
-This is a conversation you conduct, not a script to invoke — walk the user through it, don't
-dump all the questions at once.
+instead of staying behind on this machine. **Before concluding "no config yet," walk up from
+the current directory** (`find . -maxdepth 0 ...` won't do it — check CWD, then each parent, up
+to `/` or a filesystem boundary) looking for `.smart-okf/config.yaml`. Invoked from inside a
+subfolder of an already-onboarded root (e.g. Claude started directly in
+`documents/apartments/`), the config lives higher up, not in CWD — treat that ancestor as the
+root and skip onboarding entirely, including the git check in step 6 (a `git init` there would
+nest a repo inside the real root's repo). Only if no ancestor has `.smart-okf/config.yaml`
+(and no `.git` either, as a second signal) is this actually an unconfigured root. If the user's
+document root has no `.smart-okf/config.yaml` yet, run this interview before doing anything
+else. Each root is onboarded independently — running this again for a second, unrelated
+document root (a different share, a different archive) is expected and does not touch the
+first root's config. This is a conversation you conduct, not a script to invoke — walk the
+user through it, don't dump all the questions at once.
 
 **Two roles (say this once early — it answers "why a local model if Claude is driving?"):**
 
