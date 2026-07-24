@@ -18,11 +18,11 @@ FOLDER_SUMMARY_OKF_TYPE = "FolderSummary"
 
 FOLDER_INDEX_OKF_TYPE = "FolderIndex"
 """Frontmatter `type` for a roll-up index: a parent folder that has subfolders with
-aggregates but no directly-contained documents of its own. Findbuch-Prinzip — it links
+aggregates but no directly-contained documents of its own. Finding-aid principle — it links
 down to child aggregates without duplicating their content, so it carries no `sources`
 (unlike FolderSummary). Excluded from the `dream` pass (navigation, not content)."""
 
-ROLLUP_HEADING = "## Untergeordnete Ordner"
+ROLLUP_HEADING = "## Subfolders"
 """Body section listing links to child-folder aggregates. Injected into a folder's
 FolderSummary aggregate when it has subfolders, or the whole body of a FolderIndex."""
 

@@ -529,9 +529,9 @@ on real extraction only, not backfilled on unchanged re-ingest (same rule as tra
 no expensive re-extraction just to materialize a sidecar).
 
 **Roll-up is core, not optional.** The user pushed back on making it a toggle: an archival
-hierarchy is only navigable if each level describes the one beneath it (Findbuch-Prinzip).
+hierarchy is only navigable if each level describes the one beneath it (finding-aid principle).
 So `write_rollups` runs unconditionally after ingest — a folder with subfolders gets a
-`## Untergeordnete Ordner` section (its FolderSummary), or a new `type: FolderIndex` file
+`## Subfolders` section (its FolderSummary), or a new `type: FolderIndex` file
 when it is a pure parent with no documents of its own. It **links** children with a
 one-line description each and never inlines/re-summarizes them, so it adds no LLM cost and
 stays incremental. Idempotency was the subtle part: reusing an existing FolderIndex instead
@@ -548,10 +548,10 @@ browsing in Nextcloud/a file UI, distinct from the agent-facing aggregates and t
 dashboard. Safety: it writes only a file that does not exist or already bears its generated
 marker on line 1 — a hand-written README is detected and left untouched (returns None).
 
-**Gating — appraisal/Kassation.** `app/services/gating.py`, deterministic (no LLM):
+**Gating — appraisal (weeding).** `app/services/gating.py`, deterministic (no LLM):
 `exclude_patterns` skip junk (manuals, terms) from ingest entirely (logged, exit 2);
 `is_deprioritized` keeps low-value docs out of the expensive `dream` pass *eagerly* — a
-built-in trivial-keyword list (AGB, Bedienungsanleitung, …) plus user low-priority patterns
+built-in trivial-keyword list (multilingual: e.g. `agb`/`terms`, `bedienungsanleitung`/`manual`, …) plus user low-priority patterns
 deprioritize by default, and only an explicit priority pattern overrides. Password-protected
 PDFs/OOXML are detected up front (`EncryptedDocumentError`, a `DocumentIngestError` subtype)
 and skipped with a clear reason instead of failing deep in a parser.

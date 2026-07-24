@@ -50,13 +50,13 @@ fact artifact* — the user does not want a file per document by default.
 ## 3. Level 3 `aggregate` — roll-up is core behaviour, not optional
 
 Deep trees (`health/2026/befunde/`) otherwise produce many small isolated aggregates with
-no connection to their parent. Roll-up is a core part of the archival value (Findbuch /
-tektonik: every level of the hierarchy has a description that points down into the next),
-so it is standard behaviour, not a toggle.
+no connection to their parent. Roll-up is a core part of the archival value (finding-aid /
+classification-scheme principle: every level of the hierarchy has a description that points
+down into the next), so it is standard behaviour, not a toggle.
 
-Best-practice constraint (archival findmittel / MOC pattern, from the
-`dokumenten-organisation` skill's Findbuch-Prinzip): a parent MUST NOT re-summarize child
-full text. It links child aggregates plus a thin synthesized overview of what lies
+Best-practice constraint (archival finding-aid / MOC pattern, from the
+`dokumenten-organisation` skill's finding-aid principle): a parent MUST NOT re-summarize
+child full text. It links child aggregates plus a thin synthesized overview of what lies
 beneath. Children stay canonical; incrementality is preserved.
 
 **Assertions**
@@ -65,12 +65,12 @@ beneath. Children stay canonical; incrementality is preserved.
   one-line overview. This is the default and only behaviour — there is no flag to disable
   roll-up.
 - C2. A parent roll-up MUST NOT re-extract or inline child document text; it is a link
-  list plus a short synthesized overview (Findbuch-Prinzip: register, not duplication).
+  list plus a short synthesized overview (finding-aid principle: register, not duplication).
 - C3. Roll-up MUST NOT trigger re-extraction of unchanged children (hash incrementality
   holds); only the parent index is (re)written when a child aggregate changes.
 - C4. Roll-up (hierarchy index) and `dream` (cross-folder subject synthesis) are distinct
-  layers — roll-up follows the folder hierarchy (Provenienz), `dream` cuts across it
-  (Pertinenz); neither implies the other.
+  layers — roll-up follows the folder hierarchy (provenance), `dream` cuts across it
+  (pertinence); neither implies the other.
 
 ## 4. Self-updating root README for human navigation
 
@@ -91,13 +91,14 @@ UI. This is navigation + at-a-glance stats, not an OKF aggregate.
 
 ## 5. Ingestion gating — irrelevant, low-priority, and protected files
 
-Trivial documents (manuals / Bedienungsanleitungen, terms of service / AGBs, boilerplate)
-must not consume extraction or, especially, deep-analysis budget. Password-protected files
-must be skipped safely.
+Trivial documents (manuals, terms of service, boilerplate) must not consume extraction or,
+especially, deep-analysis budget. The built-in keyword list matches both English and German
+filenames (e.g. `manual`/`bedienungsanleitung`, `terms`/`agb`) since documents may arrive in
+either language. Password-protected files must be skipped safely.
 
 **Assertions**
 - E1. Onboarding asks the user which kinds of documents are irrelevant or low-priority
-  (with sensible defaults offered: manuals, AGBs/ToS, marketing) and records this in config
+  (with sensible defaults offered: manuals, terms of service, marketing) and records this in config
   (e.g. patterns / folder rules).
 - E2. Files matching an exclusion rule are not ingested at all (no extraction call), and
   the reason is logged as skipped.
@@ -122,12 +123,12 @@ canonical statement of the methodology; smart-okf references and applies it.
 
 Mapping (already implicit in the design, now made explicit):
 
-- **Provenienzprinzip** (order by origin/context) → the `aggregate` + `roll-up` layer:
+- **Principle of provenance** (order by origin/context) → the `aggregate` + `roll-up` layer:
   documents keep the folder structure they arrived in; the hierarchy is described, not
   reordered. smart-okf never moves the user's files.
-- **Pertinenzprinzip** (order by subject) → the `dream` / `matters` layer: cross-folder
-  synthesis groups by Sachverhalt regardless of where files physically live.
-- **Findbuch-Prinzip** (register points down, does not duplicate) → root README (§4) and
+- **Principle of pertinence** (order by subject) → the `dream` / `matters` layer: cross-folder
+  synthesis groups by subject matter regardless of where files physically live.
+- **Finding-aid principle** (register points down, does not duplicate) → root README (§4) and
   roll-up (§3).
 
 Where more than one principle could govern a decision, onboarding MUST ask rather than
@@ -137,8 +138,8 @@ assume.
 - G1. A doc in this repo formalizes the principles and cites the `dokumenten-organisation`
   skill as source (no silent copy of its text; reference + short applied summary).
 - G2. Onboarding asks which ordering principle governs the user's tree / retrieval
-  preference (Provenienz = respect existing folders as-is, the default and safest; vs.
-  Pertinenz-leaning = lean harder on cross-folder matters), and records the choice in
+  preference (provenance = respect existing folders as-is, the default and safest; vs.
+  pertinence-leaning = lean harder on cross-folder matters), and records the choice in
   config so the passes can weight accordingly.
 - G3. Whatever principle is chosen, smart-okf remains non-destructive to the source tree
   (it builds a knowledge layer on top; it does not rename or move the user's documents —

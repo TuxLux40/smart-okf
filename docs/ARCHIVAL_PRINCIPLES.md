@@ -1,7 +1,7 @@
 # Archival principles behind smart-okf
 
 smart-okf is not "an LLM dumped into a folder." Its layering is a direct application of
-archival and library-science method (Archiv-/Bibliothekswissenschaft). This document is
+archival and library-science method. This document is
 self-contained — the principles are stated here, not by reference to any external skill —
 so the reasoning ships with the code.
 
@@ -12,7 +12,7 @@ concern (a file-organization task), deliberately kept out of this tool.
 
 ## The three principles and where each lives
 
-### 1. Provenienzprinzip (principle of provenance) — the aggregate + roll-up layer
+### 1. Principle of provenance — the aggregate + roll-up layer
 
 Records are kept and described in the structure in which they arose; the context of
 origin is itself information and is not dissolved into a thematic re-sort. In smart-okf:
@@ -22,15 +22,15 @@ origin is itself information and is not dissolved into a thematic re-sort. In sm
 - A folder with subfolders gets a roll-up: its aggregate (or a `type: FolderIndex` file
   when it has no documents of its own) links down to each child. Every level of the
   hierarchy describes the level beneath it, so the tree stays navigable top-to-bottom —
-  the archival *Findbuch* (finding aid) applied to a filesystem.
+  the archival finding-aid concept applied to a filesystem.
 - The roll-up **links**, it never re-summarizes: a parent points at its children with a
   one-line description each and does not inline their content. This keeps the description
   at each level about *that* level, and keeps re-ingest incremental (a changed child
   doesn't force its parent to be re-extracted).
 
-### 2. Pertinenzprinzip (principle of pertinence) — the dream / matters layer
+### 2. Principle of pertinence — the dream / matters layer
 
-The complementary principle: records are grouped by subject/matter (Betreff) regardless of
+The complementary principle: records are grouped by subject/matter regardless of
 where they physically sit. A dispute with an energy provider touches `providers/`,
 `finances/`, `insurance/`, and `lawyers/` — provenance keeps those apart, pertinence pulls
 the thread together. In smart-okf this is the `dream` pass: it correlates aggregates across
@@ -44,7 +44,7 @@ eagerly (shorter shared identifiers also count), so a user whose retrieval is mo
 subject-driven than folder-driven gets more cross-folder synthesis. Concretely it sets the
 minimum shared-identifier digit length in `app/services/matter_grouping.py`.
 
-### 3. Findbuch-Prinzip (finding aid) — the navigation README
+### 3. Finding-aid principle — the navigation README
 
 At the very top, a human-facing `README.md` is regenerated on every ingest: per-folder
 links plus at-a-glance statistics, browsable in a file UI (Nextcloud, a git host). Like a
@@ -52,7 +52,7 @@ finding aid, it is an index into the holdings, not a copy of them — it points,
 duplicate. It never overwrites a hand-written README (it writes only a file bearing its own
 generated marker).
 
-## Kassation (appraisal / weeding) — gating
+## Appraisal (weeding) — gating
 
 Archival practice does not keep everything at full effort: appraisal decides what is worth
 retaining and at what depth. smart-okf's gating (`app/services/gating.py`) is the same idea:

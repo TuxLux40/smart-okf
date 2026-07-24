@@ -537,7 +537,7 @@ def test_rollup_section_added_to_parent_with_subfolders(tmp_path: Path) -> None:
     ingest_folder(str(tmp_path), client=_StubLLMClient())  # type: ignore[arg-type]
 
     parent = (health / "health.md").read_text(encoding="utf-8")
-    assert "## Untergeordnete Ordner" in parent
+    assert "## Subfolders" in parent
     assert "[visits](visits/visits.md)" in parent
 
 

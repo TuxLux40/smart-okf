@@ -520,11 +520,11 @@ def _immediate_child_concepts(directory: Path) -> list[Path]:
 
 
 def _build_rollup_section(directory: Path, child_paths: list[Path]) -> str:
-    """Build the '## Untergeordnete Ordner' section: links to child aggregates, one line each.
+    """Build the '## Subfolders' section: links to child aggregates, one line each.
 
-    Findbuch-Prinzip — the parent points down to each child with a short description drawn
-    from the child's own frontmatter; it never inlines or re-summarizes the child's content.
-    Links are relative to the parent aggregate's own location.
+    Finding-aid principle — the parent points down to each child with a short description
+    drawn from the child's own frontmatter; it never inlines or re-summarizes the child's
+    content. Links are relative to the parent aggregate's own location.
     """
     lines = [ROLLUP_HEADING, ""]
     for child_path in child_paths:

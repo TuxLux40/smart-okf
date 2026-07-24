@@ -1,14 +1,27 @@
-## 🧩 The problem, in plain terms
+## 🧩 The problem & the solution
 
-You have folders full of documents — insurance letters, doctor's reports, contracts, tax forms, government mail. When you need *"what's my policy number?"* or *"when did that dispute with the electricity company start?"*, you dig through PDFs by hand. And when you ask an AI assistant, it re-reads the same scanned files from scratch every single time — slowly, and often getting numbers wrong.
+You have folders full of documents — insurance letters, doctor's reports, contracts, tax forms, government mail and more. Suppose you have a dispute with a utility provider: you need many different information like move-in date, meter reader and bank statements to prove payments. Depending on the topic and the amount of files, compiling these facts by hand can take a *very* long time. Sure, you can ask an AI assistant, but it re-reads the same scanned files from scratch every single time — slowly, and often getting numbers wrong as the context grows. Not to mention how fast you'll burn through tokens.
 
-**smart-okf reads each document once** and writes a short, structured summary in plain Markdown *right next to your files*. After that, any question is answered from the summary in an instant — no re-scanning, no guessing. Your documents never move, never get renamed, and (by default) never leave your machine.
+**This is where the smart-okf skill comes in. It pre-reads each document once** and writes a short, structured summary in plain Markdown and adherence to the OKF-standard _right next to your files_. This enables agents to gather these facts quickly and reliably and answer any question the summary in an instant — no re-scanning, no guessing. Your documents never move, never get renamed, and (by default) never leave your machine.
 
-> Think of it as a **librarian for your filing cabinet**: it doesn't reorganize your drawers, it writes an index card for every document and a finding-aid for every drawer — then keeps noticing when the same matter shows up in three different drawers.
+Think of it as a **librarian for your filing cabinet**: it doesn't reorganize your drawers, it writes an index card for every document and a finding-aid for every drawer — then keeps noticing when the same matter shows up in three different drawers.
+
+Basically what this is supposed to achieve is automating the creation of a knowledge base from *private* documents and make the wiki self-evolve, so that retrieval of crucial information is standardized, more accessible and trustworthy.
 
 ---
 
-## ✨ What you get
+## 🎯 Core principles
+
+1. **Library + librarian** — folder summaries are the library of facts; synthesis is the librarian that connects them.
+2. **The retrieval ladder** — whole tree → summaries → transcripts → git
+3. **Compile once, then reason** — extraction is the floor, not the ceiling.
+4. **Your files stay yours** — portable Markdown, no proprietary database.
+5. **Correct facts above all** — every extraction is verified; doubtful ones are flagged, never silently trusted.
+6. **Bring your own LLM** — any OpenAI-compatible server.
+
+---
+
+## ✨ The workflow visualized
 
 ```mermaid
 flowchart LR
@@ -30,7 +43,7 @@ flowchart LR
     class F use
 ```
 
-After a run, your document folder looks like this — **your originals untouched, knowledge added alongside**:
+After a run, your document folder looks like this with **knowledge added alongside**:
 
 ```text
 documents/
@@ -39,13 +52,15 @@ documents/
 ├── matters/                  ← one file per cross-folder matter (e.g. an ongoing dispute)
 ├── insurance/
 │   ├── insurance.md          ← 📝 summary of everything in this folder
-│   ├── policy.pdf            ← your original, unchanged
-│   └── claim-letter.pdf
+│   ├── policy.pdf            ← original doc, unchanged
+│   └── claim-letter.pdf      ← original doc, unchanged
 ├── health/
-│   ├── health.md
-│   └── 2026/
-│       └── 2026.md           ← 🗂️ index linking down to sub-folders
-└── .okf-transcripts/         ← hidden: the full raw text, for exact quotes
+│   ├── health.md             ← 🗂️ index linking down to sub-folders
+│   ├── hospitals/
+│   │   └── hospitals.md      ← 📝 summary of everything in this folder
+│   └── neurology/
+│       └── neurology.md      ← 📝 summary of everything in this folder
+└── .okf-transcripts/         ← hidden: full raw text as fallback in case extraction missed something
 ```
 
 ---
@@ -58,7 +73,7 @@ documents/
 npx skills add TuxLux40/smart-okf
 ```
 
-**2. Interview** — ask your agent *"set up smart-okf for my documents"*. It walks you through the rest in [`SKILL.md`](SKILL.md#onboarding-first-run): `uv sync`, which local LLM host/model to use, privacy level, and a test ingest on one small sub-folder first.
+**2. Interview** — ask your agent _"set up smart-okf for my documents"_. It walks you through the rest in [`SKILL.md`](SKILL.md#onboarding-first-run): `uv sync`, which local LLM host/model to use, privacy level, and a test ingest on one small sub-folder first.
 
 **3. Ask questions** — through your AI assistant, or just with a text search:
 
@@ -97,7 +112,7 @@ uv run python scripts/ingest_folder.py /path/to/your/documents \
 
 ## 🔬 How it works — four simple passes
 
-Every document flows through the same pipeline. Each step is optional to *understand*, but the result is a document you can trust:
+Every document flows through the same pipeline. Each step is optional to _understand_, but the result is a document you can trust:
 
 ```mermaid
 ---
@@ -126,12 +141,35 @@ flowchart LR
 | Pass                     | Plain meaning                                                                                                                     | You get                                                                |
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
 | **1 · Extract**   | Read the text out of the file (OCR for scans, layout-aware for PDFs)                                                              | A lossless transcript                                                  |
-| **2 · Derive**    | Distil the durable facts — contract numbers, dates, contacts, amounts                                                            | Facts written into the folder summary                                  |
-| **✅ Verify**      | A model double-checks the extraction against the original; anything invented is**kept but flagged**, never silently trusted | Trustworthy facts (`_Verification: FLAGGED` marks the doubtful ones) |
+| **2 · Derive**    | Distil the durable facts — contract numbers, dates, contacts, amounts etc.                                                       | Facts written into the folder summary                                  |
+| **2.1 Verify**     | A model double-checks the extraction against the original; anything invented is**kept but flagged**, never silently trusted | Trustworthy facts (`_Verification: FLAGGED` marks the doubtful ones) |
 | **3 · Aggregate** | One summary per folder, and a roll-up index so parent folders link down to children                                               | A browsable hierarchy                                                  |
 | **4 · Dream**     | Notice when the*same* matter (a dispute, a claim) spans several folders and pull it into one file                               | `synthesis.md` + `matters/`                                        |
 
-This mirrors real **archival science** — provenance (respect the folders as they are), pertinence (group by subject across folders), and the *Findbuch* finding-aid principle (an index points down, it never duplicates). The full reasoning is in [`docs/ARCHIVAL_PRINCIPLES.md`](docs/ARCHIVAL_PRINCIPLES.md).
+This mirrors real **archival science** — provenance (respect the folders as they are), pertinence (group by subject across folders), and the finding-aid principle (an index points down, it never duplicates). The full reasoning is in [`docs/ARCHIVAL_PRINCIPLES.md`](docs/ARCHIVAL_PRINCIPLES.md).
+
+---
+
+## 🕰️ Timeline through Git versioning
+
+The skill creates a git repo at document root where the agents write updates to, so git becomes the timeline of when knowledge appeared. That means aggregates hold the current *distilled* truth; git holds *when* *it got there*.
+
+The trick that makes this useful later: we write **stable IDs** (contract numbers, customer IDs etc.) in the commit message, not just a date:
+
+```bash
+# Good — greppable IDs + which folders were touched
+git commit -m "Ingest 2026-07-18: ACME-Energy 123456789, TeleNet, InkassoCorp; providers+finances"
+
+# Weak — no join key, useless for correlation months later
+git commit -m "Ingest: 2026-07-18"
+```
+
+This pays off in two places:
+
+- **Retrieval** (ladder rung 3) — once summaries and transcripts don't have the answer, `git log --grep`/`git log -S` finds exact IDs across the whole history, and `git log --stat` / `git diff HEAD~1` shows what changed in the last ingest.
+- **Dreaming** — the automatic matter-grouping pass (`app/services/matter_grouping.py`) groups purely by shared numeric tokens found *in the aggregate text itself*; the code never calls git. But the commit-message convention exists *because* that automatic match can miss a matter (same case, different wording, no shared 5+ digit token) — a batch upload landing in one commit still correlates co-arrival, and the ID you wrote into a commit message resurfaces months later via `git log --grep`, letting you (or the agent) tie the matter back together by hand even when the automatic pass never linked it.
+
+See [`SKILL.md` — Change tracking](SKILL.md#change-tracking) for the full commit-message convention.
 
 ---
 
@@ -139,21 +177,32 @@ This mirrors real **archival science** — provenance (respect the folders as th
 
 ```mermaid
 flowchart LR
-    subgraph home["🏠 Stays on your machine / LAN (default)"]
-        d["Your PDFs"] --> e["Local LLM<br/>extracts facts"]
-        e --> m["Markdown summaries"]
-    end
-    m -. "you decide" .-> cloud["☁️ Optional: push Markdown-only<br/>to a private git remote for web agents"]
+    d["📄 Your PDFs"] --> e["🤖 Local LLM<br/>extracts facts"]
+    e --> m["📝 Markdown summaries"]
+    m --> v["🖥️ Static HTML viewer<br/>Tailscale / LAN<br/>read-only, humans + agents"]
 
     classDef home fill:#1a7f37,stroke:#0f5323,color:#fff
-    classDef opt fill:#9a6700,stroke:#5c3d00,color:#fff
-    class d,e,m home
-    class cloud opt
+    class d,e,m,v home
 ```
 
 - **Default:** a local or LAN model does the reading. Your raw documents never enter a cloud chat.
 - **Optional:** point it at a hosted model if you prefer (only with `allow_remote_llm` — an informed, explicit choice).
 - **Your files stay yours:** no proprietary database, no lock-in — just Markdown you can read, grep, and back up. smart-okf **never moves, renames, or deletes** your originals.
+- **Read-only viewer:** a self-contained, static HTML file (no server, no daemon) — serve it over Tailscale or plain LAN (`python -m http.server`, Caddy, whatever) for a simple read-only interface humans and agents both can browse.
+
+---
+
+## 🖥️ The static HTML dashboard — read-only by construction
+
+`uv run python scripts/dashboard.py /path/to/documents` writes a single self-contained `.okf-dashboard.html`: an MD browser, a `git log --graph` view, and a config summary, with inline CSS/JS and no CDN dependencies.
+
+Read-only isn't a permission flag here — it's a property of what got built:
+
+- **No server.** `render_dashboard()` returns one HTML string; the script writes it to disk and exits. Nothing ever listens on a socket, so there's no endpoint to send a write to.
+- **No write code path.** The only JavaScript on the page is a client-side search filter over what's already rendered — no `fetch`, no `XMLHttpRequest`, no form that POSTs anywhere. Config is *displayed*, never *edited* from the page: there's no code that would take a change and write it back to `smart-okf.yaml` or the documents.
+- **Regenerate, don't mutate.** Want it current? Re-run the script — it re-reads the tree and produces a new static file. There's no "save" button because there's nothing on the server side to save to.
+
+That last point is also the boundary the project holds on purpose: a write path here is the line where this stops being a static dashboard and becomes the webapp smart-okf deliberately isn't (see [`app/services/ports.py`](app/services/ports.py) for the Protocols reserved for that, unimplemented).
 
 ---
 
@@ -186,9 +235,9 @@ flowchart LR
 | An OpenAI-compatible LLM server                              | Does the reading —[LM Studio](https://lmstudio.ai/), [Ollama](https://ollama.com/), llama.cpp, vLLM |
 | [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`)     | Fast searching                                                                                     |
 | `tesseract`, `ghostscript`                               | OCR for scanned documents                                                                          |
-| [marker](https://github.com/datalab-to/marker) *(optional)* | Best-quality PDF reading — installed separately (`pipx install marker-pdf`)                     |
+| [marker](https://github.com/datalab-to/marker) _(optional)_ | Best-quality PDF reading — installed separately (`pipx install marker-pdf`)                     |
 
-> ℹ️ **marker** is GPL-3.0 with model weights under a modified OpenRAIL-M licence (free for personal/research use). It's kept *outside* this project's dependencies; pass `--no-marker` to use the built-in pdfplumber + OCR path instead.
+> ℹ️ **marker** is GPL-3.0 with model weights under a modified OpenRAIL-M licence (free for personal/research use). It's kept _outside_ this project's dependencies; pass `--no-marker` to use the built-in pdfplumber + OCR path instead.
 
 ---
 
@@ -197,7 +246,7 @@ flowchart LR
 | Alternative                                               | Great for                      | What smart-okf adds                                                                                     |
 | --------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------- |
 | **[Paperless-ngx](https://docs.paperless-ngx.com/)** | OCR, tagging, full-text search | LLM-distilled*facts* in portable Markdown next to your files — not locked in a database              |
-| **"Chat with your PDFs" RAG**                       | Quick Q&A on a few docs        | Durable structured facts, provenance, and a retrieval contract an agent must follow — not one-off chat |
+| **RAG**                                             | Quick Q&A on a few docs        | Durable structured facts, provenance, and a retrieval contract an agent must follow — not one-off chat |
 | **Vector / embedding search**                       | Fuzzy semantic search at scale | Exact ID/date matching with plain`rg`, no embedding infra, no privacy tradeoff                        |
 
 smart-okf's niche: **an automated pipeline over your real folder tree + a retrieval method agents actually follow + git as a timeline**, all local-first. It doesn't claim to have invented Markdown notes — it makes them reliable for a life archive.
@@ -205,7 +254,7 @@ smart-okf's niche: **an automated pipeline over your real folder tree + a retrie
 ---
 
 <details>
-<summary><h2>🛠️ Under the hood (for the curious)</h2></summary>
+<summary>🛠️ Under the hood (for the curious)</summary>
 
 ### The retrieval ladder — how an agent finds an answer
 
@@ -216,17 +265,17 @@ Your life doesn't fit one folder name: a utility dispute touches `providers/`, `
 | 0    | **`synthesis.md`**                           | The big-picture map of cross-folder matters, conflicts, open actions                                                            |
 | 0.5  | **`matters/*.md`**                           | A specific cross-folder case already resolved to its own file                                                                   |
 | 0.8  | **`README.md` + roll-up indexes**            | Orient in an unfamiliar tree — which summary to read next (links, not facts)                                                   |
-| 1    | **Folder summaries** (`type: FolderSummary`) | Distilled facts, tags, provenance —*start here for facts*. A `_Verification: FLAGGED` line = treat that fact as unverified |
+| 1    | **Folder summaries** (`type: FolderSummary`) | Distilled facts, tags, provenance —_start here for facts_. A `_Verification: FLAGGED` line = treat that fact as unverified |
 | 2    | **Transcripts** (`.okf-transcripts/`)        | Exact wording, full IDs, quotes when a summary is thin                                                                          |
 | 3    | **Git history**                                | What's new, same-batch uploads, the same matter months later via IDs in commit messages                                         |
 
-Searching the **whole tree** and falling back to transcripts (never re-OCRing, never inventing) is the non-negotiable part — encoding that ladder into the skill *is* the product.
+Searching the **whole tree** and falling back to transcripts (never re-OCRing, never inventing) is the non-negotiable part — encoding that ladder into the skill _is_ the product.
 
 ### Orchestrator vs extractor
 
 | Role                   | Who                                                                                  | Touches raw document bytes?                                  |
 | ---------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------ |
-| **Orchestrator** | Claude Code / Hermes / cron / you — decides*when* to ingest and *how* to answer | Prefer**no** — answer from Markdown, transcripts, git |
+| **Orchestrator** | Claude Code / Hermes / cron / you — decides*when* to ingest and _how_ to answer | Prefer**no** — answer from Markdown, transcripts, git |
 | **Extractor**    | The local (or hosted) model called*inside* the ingest script                       | **Yes**, during ingest only                            |
 
 The extractor always runs inside `scripts/ingest_folder.py`, so a scheduled cron run and an interactive run behave identically.
@@ -275,9 +324,9 @@ flowchart TB
     class Sources,Agg,Synth,Tx,Nav,Git c
 ```
 
-### What this deliberately is *not*
+### What this deliberately is _not_
 
-Not a vector database, not a BM25 search server, not a graph DB, not a multi-hop agent framework. For a personal archive, good extraction + `rg` + the retrieval ladder beats all of them on exact-ID matching, privacy, and simplicity. If a tree ever grows huge and plain search feels weak, *then* a hybrid search backend is an optional upgrade — never a prerequisite.
+Not a vector database, not a BM25 search server, not a graph DB, not a multi-hop agent framework. For a personal archive, good extraction + `rg` + the retrieval ladder beats all of them on exact-ID matching, privacy, and simplicity. If a tree ever grows huge and plain search feels weak, _then_ a hybrid search backend is an optional upgrade — never a prerequisite.
 
 ### An example summary file (OKF format)
 
@@ -353,30 +402,8 @@ Design history and rationale: [`docs/DESIGN.md`](docs/DESIGN.md). Continuous int
 
 ---
 
-## 🗺️ Roadmap
-
-**Shipped:** the full extract → derive → aggregate (with roll-up) → dream pipeline, mandatory fact verification, gating, self-updating navigation, plausibility validator, static dashboard, and a private-git-remote path for web agents.
-
-**Being hardened:** date-range extraction, re-ingest automation, retrieval ergonomics.
-
-**Considered, not adopted:** vector/embedding RAG, a search-engine service, a graph database — deliberately out of scope for a personal, local-first archive unless real scale pain appears. Full history in [`docs/DESIGN.md`](docs/DESIGN.md).
-
----
-
-## 🎯 Core principles
-
-1. **Library + librarian** — folder summaries are the library of facts; synthesis is the librarian that connects them.
-2. **The retrieval ladder is mandatory** — whole tree → summaries → transcripts → git; never guess, never re-OCR.
-3. **Compile once, then reason** — extraction is the floor, not the ceiling.
-4. **Privacy is a choice** — local by default, hosted only on purpose.
-5. **Your files stay yours** — portable Markdown, no proprietary database, no moving your documents.
-6. **Correct facts above all** — every extraction is verified; doubtful ones are flagged, never silently trusted.
-7. **Bring your own LLM** — any OpenAI-compatible server, local preferred.
-
----
-
 ## 📎 Related & licence
 
-Inspired by [Karpathy-style LLM wikis](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) and Google's [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf).
+Based on [Karpathy-style LLM wikis](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) and Google's [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf). Further inspiration taken from Plastic Labs [Honcho](https://github.com/plastic-labs/honcho).
 
 Licensed under [MIT](LICENSE).

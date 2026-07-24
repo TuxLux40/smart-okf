@@ -170,7 +170,7 @@ types gracefully:
 | `Event` | Something that happened, with a date |
 | `Person` | An entity/person profile |
 | `FolderSummary` | Aggregate of every ingested document in one folder — what ingest produces by default |
-| `FolderIndex` | Roll-up index for a folder that has subfolders with aggregates but no documents of its own — links down to child aggregates (Findbuch-Prinzip), carries no `sources`, excluded from the dream pass |
+| `FolderIndex` | Roll-up index for a folder that has subfolders with aggregates but no documents of its own — links down to child aggregates (finding-aid principle), carries no `sources`, excluded from the dream pass |
 | `DocumentSummary` | Extraction summary for exactly one document (manual authoring; ingest no longer produces these directly) |
 | `Index` | A directory listing (`index.md`) |
 | `Insight` | Derived/inductive conclusion (Dream pass, optional/later) |

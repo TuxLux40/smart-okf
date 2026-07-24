@@ -107,7 +107,19 @@ do not re-read every original PDF for facts that were already distilled.
    confirm the folder exists and looks like personal documents, not a code repo or media
    library.
 
-6. **Ask which archival ordering principle governs** (`ordering_principle`, see
+6. **Set up git version tracking** — check each document root:
+
+   ```bash
+   git -C /path/to/documents rev-parse --is-inside-work-tree
+   ```
+
+   If that fails, offer to `git init` it (and a first commit of whatever's already there).
+   This is not optional polish: git is the version timeline the retrieval ladder (step 3) and
+   Change tracking rely on — without a repo here, "what changed since the last ingest" and
+   "find this ID months later" have no history to search. Skip only if the user explicitly
+   already tracks the tree elsewhere and tells you so.
+
+7. **Ask which archival ordering principle governs** (`ordering_principle`, see
    [docs/ARCHIVAL_PRINCIPLES.md](docs/ARCHIVAL_PRINCIPLES.md)). Both the per-folder aggregate
    layer (provenance) and the cross-folder matter layer (pertinence) always run; this only
    tunes how eagerly matters form across folders:
@@ -118,7 +130,7 @@ do not re-read every original PDF for facts that were already distilled.
    - **`pertinence`**: lean into subject-based synthesis; shorter shared IDs also form
      matters. Best when the same affair is scattered across many folders.
 
-7. **Ask what to keep out** (gating, deterministic — no LLM). Two independent lists:
+8. **Ask what to keep out** (gating, deterministic — no LLM). Two independent lists:
    `exclude_patterns` (glob) for documents never worth ingesting (manuals, terms of
    service, marketing — e.g. `["*handbuch*", "*/AGB/*"]`), and `low_priority_patterns` for
    things worth storing but not deep-analyzing. Built-in trivial keywords (AGB,
@@ -126,14 +138,14 @@ do not re-read every original PDF for facts that were already distilled.
    their own exceptions; `priority_patterns` forces something back into deep analysis.
    Password-protected files are always skipped and logged automatically.
 
-8. **Write `smart-okf.yaml`** in the skill root from what you learned (see
+9. **Write `smart-okf.yaml`** in the skill root from what you learned (see
    [smart-okf.example.yaml](smart-okf.example.yaml): `document_roots`, `llm_host`, `llm_model`,
    optional `vision_model` / `dream_model` / `dream_host` / `verify_model` / `verify_host` /
    `use_marker` / `ordering_principle` / `exclude_patterns` / `low_priority_patterns` /
    `priority_patterns` / `derive_per_file` / `generate_readme`). Plain YAML — write it
    directly; there is no `scripts/onboard.py`.
 
-9. Offer a first ingest on one subfolder as a smoke test before the whole tree — see
+10. Offer a first ingest on one subfolder as a smoke test before the whole tree — see
    **Ingest cautions** below.
 
 ## Query (default operation)
@@ -148,7 +160,7 @@ vector DB: it is **whole-tree ripgrep + read + git**, with an explicit fallback 
 |------|--------|---------|
 | 0 | **Synthesis** (`<root>/synthesis.md`, `type: Synthesis`) | Cross-folder matters, conflicts, patterns, open actions — check first for any question that could span folders; it names the aggregates to read next |
 | 0.5 | **Matter files** (`<root>/matters/*.md`, `type: Matter`) | A specific cross-folder case already resolved to a dedicated file — check here when the synthesis or a shared ID points at one before reading every cited aggregate |
-| 0.8 | **Navigation / roll-up** (root `README.md`; parent `## Untergeordnete Ordner` sections; `type: FolderIndex` files) | Orient in an unfamiliar tree — the root README lists every folder with stats, and each folder with subfolders links down to its children. Use to find *which* aggregate to read, not as a fact source (it links, never duplicates) |
+| 0.8 | **Navigation / roll-up** (root `README.md`; parent `## Subfolders` sections; `type: FolderIndex` files) | Orient in an unfamiliar tree — the root README lists every folder with stats, and each folder with subfolders links down to its children. Use to find *which* aggregate to read, not as a fact source (it links, never duplicates) |
 | 1 | **Aggregates** (`**/*.md` with `type: FolderSummary`) | Distilled facts, tags, orientation summary, provenance — **always start here** for folder-level facts. A `_Verification: FLAGGED — <reason>_` line under a section means that extraction failed its fact check — treat it as untrusted; confirm against the transcript |
 | 2 | **Transcripts (mandatory fallback)** (`.okf-transcripts/`) | When MD is thin, partial, or missing a full ID/amount/quote — search here **before** re-ingest or guessing. Hidden folder; greppable; lossless raw extract |
 | 3 | **Git history** | “What’s new,” same-batch uploads, ID-tagged commits months later |
@@ -206,7 +218,11 @@ If no aggregate exists for a relevant folder yet, offer to ingest first.
 
 ## Change tracking
 
-Documents root is a git repo. After each ingest, **commit** so history is the version timeline.
+Documents root is a git repo (set up in Onboarding step 6 if it wasn't already one). **After
+every pass that touches files — ingest (extract+derive+aggregate) and dream — commit before
+moving on.** This is not a suggestion: git is the only place "what's new since the last run"
+and "find this ID months later" (retrieval ladder step 3) actually live. A pass that ran but
+was never committed is invisible to both.
 
 **git = ingest/version timeline; aggregates = current distilled truth.** No changelogs inside
 every `.md`. Case-event dates from the documents still live in the body as facts.

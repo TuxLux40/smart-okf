@@ -2,8 +2,8 @@
 
 A plain-Markdown index a person browses in a file UI (Nextcloud, Finder, a git host) —
 distinct from the OKF aggregates (which are for agents) and from the HTML dashboard
-(`app/services/dashboard.py`, richer but needs a browser). Findbuch-Prinzip at the top of
-the tree: it points into each top-level folder's aggregate and shows a few at-a-glance
+(`app/services/dashboard.py`, richer but needs a browser). Finding-aid principle at the top
+of the tree: it points into each top-level folder's aggregate and shows a few at-a-glance
 statistics, without duplicating any aggregate's content.
 
 Regenerated at the end of every ingest (when `generate_readme` is set) so it never drifts.

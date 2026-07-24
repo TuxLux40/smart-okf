@@ -22,33 +22,96 @@ from pathlib import PurePosixPath
 
 DEFAULT_TRIVIAL_KEYWORDS: frozenset[str] = frozenset(
     {
+        # German
         "agb",
         "bedienungsanleitung",
         "gebrauchsanweisung",
         "handbuch",
-        "manual",
-        "userguide",
-        "user-guide",
         "widerruf",
         "widerrufsbelehrung",
         "datenschutzerklaerung",
         "datenschutzerklärung",
         "nutzungsbedingungen",
-        "terms",
-        "termsofservice",
-        "tos",
-        "newsletter",
         "werbung",
         "prospekt",
         "katalog",
+        # English
+        "manual",
+        "userguide",
+        "user-guide",
+        "terms",
+        "termsofservice",
+        "tos",
+        "privacy",
+        "privacypolicy",
+        "withdrawal",
+        "cancellationpolicy",
+        "advertisement",
+        "advertising",
+        "catalog",
+        "catalogue",
+        "brochure",
+        "newsletter",
         "flyer",
+        # French
+        "manueldutilisation",
+        "modedemploi",
+        "conditionsgenerales",
+        "conditionsgénérales",
+        "cgu",
+        "cgv",
+        "politiquedeconfidentialite",
+        "politiquedeconfidentialité",
+        "retractation",
+        "rétractation",
+        "publicite",
+        "publicité",
+        "prospectus",
+        "infolettre",
+        # Spanish
+        "manualdeusuario",
+        "terminosycondiciones",
+        "términosycondiciones",
+        "condicionesdeuso",
+        "politicadeprivacidad",
+        "políticadeprivacidad",
+        "derechodedesistimiento",
+        "publicidad",
+        "catalogo",
+        "catálogo",
+        "folleto",
+        "boletin",
+        "boletín",
+        # Italian
+        "manualedistruzioni",
+        "terminicondizioni",
+        "condizionidiutilizzo",
+        "informativaprivacy",
+        "dirittodirecesso",
+        "recesso",
+        "pubblicita",
+        "pubblicità",
+        "opuscolo",
+        "volantino",
+        # Dutch
+        "handleiding",
+        "gebruiksaanwijzing",
+        "algemenevoorwaarden",
+        "privacybeleid",
+        "herroepingsrecht",
+        "reclame",
+        "catalogus",
+        "nieuwsbrief",
     }
 )
 """Filename/path substrings that mark a document as boilerplate — deprioritized eagerly
-(kept out of `dream`) even when the user listed no patterns. Deliberately conservative:
-these words rarely appear in documents carrying personal facts (contracts, letters,
-statements), so a match is a strong low-value signal. Never used to *exclude* from ingest
-(too risky to silently drop a file on a keyword) — only to deprioritize."""
+(kept out of `dream`) even when the user listed no patterns. Covers German, English,
+French, Spanish, Italian, and Dutch, since documents may arrive in any of those. Deliberately
+conservative: these words rarely appear in documents carrying personal facts (contracts,
+letters, statements), so a match is a strong low-value signal — generic short words that
+could collide with real folder/file names (e.g. a bare "folder") are intentionally left out.
+Never used to *exclude* from ingest (too risky to silently drop a file on a keyword) — only
+to deprioritize."""
 
 
 @dataclass
