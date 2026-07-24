@@ -8,9 +8,10 @@ Usage:
     uv run python scripts/ingest_folder.py /path/to/documents
     uv run python scripts/ingest_folder.py /path/to/documents --host http://127.0.0.1:1234 --model gemma-4-e4b-it-qat
 
-Config is read from `<folder>/.smart-okf/config.yaml` if present (see SKILL.md's Onboarding
-section to create one) — one config per document root, so it travels with the tree (e.g. over
-a private git remote) instead of staying behind on the machine that ran ingest.
+Config is read from `<folder>/.smart-okf/config.yaml`, or the nearest ancestor's if `folder`
+is a subfolder of an already-onboarded root (see SKILL.md's Onboarding section to create one)
+— one config per document root, so it travels with the tree (e.g. over a private git remote)
+instead of staying behind on the machine that ran ingest.
 """
 
 import argparse
@@ -18,7 +19,7 @@ import sys
 from pathlib import Path
 
 from app.config import load_config
-from app.constants import LLM_LOG_FILENAME
+from app.constants import DEFAULT_LLM_HOST, DEFAULT_LLM_MODEL, LLM_LOG_FILENAME
 from app.services.extraction_options import ExtractionOptions
 from app.services.gating import GatingRules
 from app.services.ingest import IngestFolderResult, ingest_folder
@@ -67,6 +68,13 @@ def main() -> None:
 
     root = Path(args.folder).expanduser().resolve()
     config = load_config(root)
+    if config is None and args.host is None and args.model is None:
+        print(
+            f"warning: no .smart-okf/config.yaml found at {root} or any parent — "
+            f"using built-in defaults ({DEFAULT_LLM_MODEL} @ {DEFAULT_LLM_HOST}). "
+            "Run onboarding (SKILL.md) or pass --host/--model.",
+            file=sys.stderr,
+        )
     folders = [str(root)]
 
     host: str | None = args.host or (config.llm_host if config is not None else None)

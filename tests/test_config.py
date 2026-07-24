@@ -137,3 +137,19 @@ def test_load_config_does_not_leak_across_different_roots(tmp_path: Path) -> Non
     assert load_config(root_a) is not None
     assert load_config(root_a).llm_model == "model-a"  # type: ignore[union-attr]
     assert load_config(root_b) is None
+
+
+def test_load_config_walks_up_to_an_ancestor_root(tmp_path: Path) -> None:
+    """A subfolder of an already-onboarded root (e.g. an ingest smoke test on one
+    subfolder, per SKILL.md) must still resolve the root's config, not silently fall back
+    to built-in defaults."""
+    root = tmp_path / "documents"
+    subfolder = root / "apartments" / "Quantiusstrasse"
+    subfolder.mkdir(parents=True)
+    (root / ".smart-okf").mkdir()
+    (root / ".smart-okf" / "config.yaml").write_text(yaml.dump({"llm_model": "model-root"}))
+
+    config = load_config(subfolder)
+
+    assert config is not None
+    assert config.llm_model == "model-root"

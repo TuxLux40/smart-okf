@@ -47,6 +47,21 @@ def config_path_for_root(root: Path) -> Path:
     return root / CONFIG_DIR_NAME / CONFIG_FILENAME
 
 
+def find_config_path(start: Path) -> Path | None:
+    """Walk `start` and its parents up to the filesystem root looking for
+    `.smart-okf/config.yaml`. Callers may legitimately point scripts at a subfolder of an
+    already-onboarded document root (e.g. an ingest smoke test on one subfolder, per
+    SKILL.md) — the config still lives at the root, not in that subfolder, so a literal
+    `start / CONFIG_DIR_NAME / CONFIG_FILENAME` check alone would miss it and silently fall
+    back to built-in defaults instead of the user's actual settings.
+    """
+    for candidate in (start, *start.parents):
+        config_path = config_path_for_root(candidate)
+        if config_path.is_file():
+            return config_path
+    return None
+
+
 def parse_llm_host(value: str) -> str:
     """Extract a bare hostname from a URL or `host:port` string.
 
@@ -215,16 +230,17 @@ class SmartOkfConfig(BaseSettings):
 
 
 def load_config(root: Path) -> SmartOkfConfig | None:
-    """Load the config for one document root: `<root>/.smart-okf/config.yaml`, env vars
-    (`SMART_OKF_*`) still override. `SMART_OKF_CONFIG` can point at a file somewhere else
-    entirely (tests, or a config kept outside the root it describes) and wins over the
-    root-relative default. None if the resolved file doesn't exist or fails validation —
-    every field has a default, so callers can't tell "no config" from "all defaults" any
-    other way.
+    """Load the config for one document root: `<root>/.smart-okf/config.yaml`, or the
+    nearest ancestor's if `root` is a subfolder of an already-onboarded root (see
+    `find_config_path`). Env vars (`SMART_OKF_*`) still override. `SMART_OKF_CONFIG` can
+    point at a file somewhere else entirely (tests, or a config kept outside the root it
+    describes) and wins over both. None if no config file is found (at `root` or any
+    ancestor) or it fails validation — every field has a default, so callers can't tell
+    "no config" from "all defaults" any other way.
     """
     env_override = os.getenv("SMART_OKF_CONFIG")
-    config_path = Path(env_override) if env_override else config_path_for_root(root)
-    if not config_path.is_file():
+    config_path = Path(env_override) if env_override else find_config_path(root)
+    if config_path is None or not config_path.is_file():
         return None
     token = _config_path_override.set(config_path)
     try:
