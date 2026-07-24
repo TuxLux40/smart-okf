@@ -17,21 +17,27 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.constants import (
+    FACTS_DIR_NAME,
+    FOLDER_INDEX_OKF_TYPE,
     FOLDER_SUMMARY_OKF_TYPE,
     IMAGE_DOCUMENT_SUFFIXES,
     LLM_LOG_FILENAME,
     RESERVED_CONCEPT_FILENAMES,
+    ROLLUP_HEADING,
     TRANSCRIPTS_DIR_NAME,
 )
 from app.exceptions import DocumentIngestError, LLMClientError
 from app.models.okf import OKFDocument, OKFFrontmatter
 from app.services.chunking import chunk_text
 from app.services.extraction_options import DEFAULT_EXTRACTION, LIGHT_EXTRACTION, ExtractionOptions
+from app.services.fact_verification import FactVerificationResult, verify_extraction
+from app.services.gating import GatingRules, is_excluded
 from app.services.llm_client import LLMClient
 from app.services.text_extraction import extract_text_from_file, is_supported_document
 from app.types import FrontmatterPatch
 
 _SOURCE_MARKER_PATTERN = re.compile(r"^_Source: (?P<name>.+)_$", re.MULTILINE)
+_ROLLUP_SECTION_PATTERN = re.compile(re.escape(ROLLUP_HEADING) + r"\n.*?(?=\n## |\Z)", re.DOTALL)
 
 
 @dataclass
@@ -43,17 +49,22 @@ class IngestFolderResult:
     unchanged_dirs: list[Path] = field(default_factory=list)
     skipped: list[tuple[Path, str]] = field(default_factory=list)
     removed_paths: list[Path] = field(default_factory=list)
+    flagged: list[tuple[Path, str]] = field(default_factory=list)
+    """Files whose extraction was written but failed fact verification — the section is
+    kept (never silently dropped) and marked in the aggregate body with a
+    `_Verification: FLAGGED — <reason>_` line; this list is the same information for a
+    CLI/caller summary without re-parsing every aggregate."""
 
     @property
     def exit_code(self) -> int:
-        """Process exit code for CLI callers: 1 bad root, 2 partial (skips), 0 clean.
+        """Process exit code for CLI callers: 1 bad root, 2 partial (skips/flags), 0 clean.
 
-        Nonzero on skips so cron/scheduled runs go red instead of silently "green"
-        while files fail to ingest.
+        Nonzero on skips or flags so cron/scheduled runs go red instead of silently
+        "green" while files fail to ingest or fail fact verification.
         """
         if not self.root.is_dir():
             return 1
-        if self.skipped:
+        if self.skipped or self.flagged:
             return 2
         return 0
 
@@ -116,13 +127,19 @@ def extract_document(
     client: LLMClient,
     *,
     options: ExtractionOptions = DEFAULT_EXTRACTION,
-) -> OKFDocument:
+    verify_client: LLMClient | None = None,
+) -> tuple[OKFDocument, FactVerificationResult]:
     """Extract and structure one document into an OKF document (no aggregate write).
 
     Documents too large for a single LLM call are chunked (`chunk_text`) and extracted
     per chunk, then merged (`merge_chunk_documents`) — this always returns exactly one
     document, preserving the one-file-one-aggregate-section invariant regardless of how
     many LLM calls it took.
+
+    Always followed by one fact-verification call against the raw text already read
+    above (never a second OCR/re-read) — mandatory, not opt-in; `verify_client` lets a
+    separate (e.g. bigger) model do the checking, defaulting to `client` itself so
+    verification runs even when no separate verifier is configured.
     """
     context = str(file_path.relative_to(root))
     if file_path.suffix.lower() in IMAGE_DOCUMENT_SUFFIXES and client.vision_model is not None:
@@ -144,7 +161,9 @@ def extract_document(
             raise DocumentIngestError(f"Failed to parse OKF markdown for {file_path}") from error
 
     document = merge_chunk_documents(documents)
-    return apply_ingest_defaults(document, file_path, root)
+    document = apply_ingest_defaults(document, file_path, root)
+    verification = verify_extraction(raw_text, document.body, verify_client or client)
+    return document, verification
 
 
 def merge_chunk_documents(documents: list[OKFDocument]) -> OKFDocument:
@@ -181,17 +200,30 @@ def merge_chunk_documents(documents: list[OKFDocument]) -> OKFDocument:
     return OKFDocument(frontmatter=frontmatter, body=body)
 
 
-def render_section(file_path: Path, document: OKFDocument) -> str:
+def render_section(file_path: Path, document: OKFDocument, verification: FactVerificationResult | None = None) -> str:
     """Render one source document's body section for the folder aggregate.
 
     Headings inside the document body are demoted one level (capped at h6) so the
     aggregate's `## <document>` sections stay the only h2s — `parse_existing_sections`
     splits on h2, and un-demoted inner h2s would fragment a section and silently
     truncate it on incremental re-ingest.
+
+    A failed `verification` is rendered inline as a `_Verification: FLAGGED — <reason>_`
+    line, right under `_Source:` — visible to anyone reading the aggregate directly
+    (human or agent), not only to whoever happens to check `IngestFolderResult.flagged`.
+    The section is still written either way: a flagged extraction might still contain
+    real, useful facts, and this project's convention is to surface a problem rather
+    than silently drop the data (same principle as keeping a stale section when
+    re-extraction fails outright).
     """
     heading = document.frontmatter.title or file_path.name
     body = re.sub(r"^(#{1,5}) ", r"#\1 ", document.body, flags=re.MULTILINE)
-    return f"## {heading}\n\n_Source: {file_path.name}_\n\n{body}"
+    verification_line = (
+        f"_Verification: FLAGGED — {verification.issue}_\n\n"
+        if verification is not None and not verification.passed
+        else ""
+    )
+    return f"## {heading}\n\n_Source: {file_path.name}_\n\n{verification_line}{body}"
 
 
 def parse_existing_sections(summary: OKFDocument) -> dict[str, str]:
@@ -220,14 +252,47 @@ def load_existing_summary(summary_path: Path) -> OKFDocument | None:
         return None
 
 
+def facts_path(file_path: Path, root: Path) -> Path:
+    """Return the per-file derived-facts sidecar path: `<root>/.okf-facts/<relpath>.md`."""
+    relative = file_path.relative_to(root)
+    return root / FACTS_DIR_NAME / relative.parent / f"{relative.name}.md"
+
+
+def write_facts_file(file_path: Path, root: Path, document: OKFDocument) -> None:
+    """Persist one document's extraction as a standalone facts file (opt-in per-file artifact).
+
+    Additive only — the same facts are already in the folder aggregate; this mirrors the
+    tree under `.okf-facts/` for callers who want a file per document. Hidden dir, like
+    transcripts, so it never clutters the user's visible folders.
+    """
+    target = facts_path(file_path, root)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(document.to_markdown(), encoding="utf-8")
+
+
 def ingest_folder(
     folder: str,
     client: LLMClient | None = None,
     *,
     options: ExtractionOptions = DEFAULT_EXTRACTION,
     verbose: bool = False,
+    verify_client: LLMClient | None = None,
+    rules: GatingRules | None = None,
+    derive_per_file: bool = False,
+    generate_readme: bool = True,
 ) -> IngestFolderResult:
-    """Ingest supported documents from a folder, writing one aggregate `.md` per subfolder."""
+    """Ingest supported documents from a folder, writing one aggregate `.md` per subfolder.
+
+    `verify_client` runs the mandatory post-extraction fact check (see `extract_document`)
+    — pass a separate (e.g. bigger/smarter) model to check the extractor's own output with
+    a different model than the one that might have made the mistake; omit it to verify
+    with the same client that did the extraction.
+
+    `rules` gates ingest: files matching an exclude pattern are skipped entirely (logged),
+    for documents carrying no durable facts (manuals, terms). `derive_per_file` additionally
+    writes one `.okf-facts/<file>.md` per document (the facts are always in the aggregate
+    regardless). `generate_readme` refreshes the human navigation `README.md` at the root.
+    """
     root = Path(folder).expanduser().resolve()
     result = IngestFolderResult(root=root)
     if not root.is_dir():
@@ -236,6 +301,7 @@ def ingest_folder(
         return result
 
     llm_client = client or LLMClient(log_path=root / LLM_LOG_FILENAME)
+    gating_rules = rules or GatingRules()
     if verbose:
         print(f"Scanning {root}...")
 
@@ -243,7 +309,26 @@ def ingest_folder(
         p for p in root.rglob("*") if p.is_dir() and not any(part.startswith(".") for part in p.relative_to(root).parts)
     )
     for directory in directories:
-        _ingest_directory(directory, root, llm_client, result, options=options, verbose=verbose)
+        _ingest_directory(
+            directory,
+            root,
+            llm_client,
+            result,
+            options=options,
+            verbose=verbose,
+            verify_client=verify_client,
+            rules=gating_rules,
+            derive_per_file=derive_per_file,
+        )
+
+    write_rollups(root, result, verbose=verbose)
+
+    if generate_readme:
+        # Local import avoids a module-level cycle (navigation imports from this module).
+        from app.services.navigation import write_navigation
+
+        if write_navigation(root) is None and verbose:
+            print("  Navigation README left untouched (hand-written README.md found)")
 
     if verbose:
         print(
@@ -298,9 +383,21 @@ def _ingest_directory(
     *,
     options: ExtractionOptions,
     verbose: bool,
+    verify_client: LLMClient | None = None,
+    rules: GatingRules | None = None,
+    derive_per_file: bool = False,
 ) -> None:
     """Ingest the files directly inside one directory (non-recursive) into its aggregate."""
-    files = sorted(f for f in directory.iterdir() if f.is_file() and is_supported_document(f))
+    gating_rules = rules or GatingRules()
+    supported = sorted(f for f in directory.iterdir() if f.is_file() and is_supported_document(f))
+    files: list[Path] = []
+    for candidate in supported:
+        if is_excluded(str(candidate.relative_to(root)), gating_rules):
+            result.skipped.append((candidate, "excluded by gating pattern (not ingested)"))
+            if verbose:
+                print(f"  Excluded {candidate} (gating pattern)")
+            continue
+        files.append(candidate)
     if not files:
         _remove_orphan_aggregate(directory, result, verbose=verbose)
         return
@@ -341,7 +438,9 @@ def _ingest_directory(
         if verbose:
             print(f"Processing: {file_path}")
         try:
-            document = extract_document(file_path, root, client, options=options)
+            document, verification = extract_document(
+                file_path, root, client, options=options, verify_client=verify_client
+            )
         except Exception as error:  # noqa: BLE001 — one corrupt file must never abort the whole run
             result.skipped.append((file_path, str(error)))
             if file_path.name in old_sections and file_path.name in old_hashes:
@@ -357,7 +456,13 @@ def _ingest_directory(
                 print(f"  Skipped {file_path}: {error}")
             continue
 
-        sections.append(render_section(file_path, document))
+        if not verification.passed:
+            result.flagged.append((file_path, verification.issue))
+            if verbose:
+                print(f"  Flagged {file_path}: {verification.issue}")
+        sections.append(render_section(file_path, document, verification))
+        if derive_per_file:
+            write_facts_file(file_path, root, document)
         ingested_files.append(file_path)
         extracted_any = True
         current_hashes[file_path.name] = hash_file(file_path)  # OCR may have rewritten the PDF
@@ -395,3 +500,106 @@ def _ingest_directory(
     result.written_paths.append(summary_path)
     if verbose:
         print(f"  -> Wrote {summary_path}")
+
+
+def _folder_concept(directory: Path) -> OKFDocument | None:
+    """Load a folder's own concept file if it is our output (a FolderSummary or FolderIndex)."""
+    document = load_existing_summary(folder_summary_path(directory))
+    if document is None or document.frontmatter.type not in {FOLDER_SUMMARY_OKF_TYPE, FOLDER_INDEX_OKF_TYPE}:
+        return None
+    return document
+
+
+def _immediate_child_concepts(directory: Path) -> list[Path]:
+    """Aggregate/index paths of the directory's immediate subfolders that have one."""
+    children: list[Path] = []
+    for sub in sorted(p for p in directory.iterdir() if p.is_dir() and not p.name.startswith(".")):
+        if _folder_concept(sub) is not None:
+            children.append(folder_summary_path(sub))
+    return children
+
+
+def _build_rollup_section(directory: Path, child_paths: list[Path]) -> str:
+    """Build the '## Untergeordnete Ordner' section: links to child aggregates, one line each.
+
+    Findbuch-Prinzip — the parent points down to each child with a short description drawn
+    from the child's own frontmatter; it never inlines or re-summarizes the child's content.
+    Links are relative to the parent aggregate's own location.
+    """
+    lines = [ROLLUP_HEADING, ""]
+    for child_path in child_paths:
+        child = _folder_concept(child_path.parent)
+        description = ""
+        if child is not None:
+            description = child.frontmatter.description or child.frontmatter.title or ""
+        relative_link = child_path.relative_to(directory).as_posix()
+        label = child_path.parent.name
+        lines.append(f"- [{label}]({relative_link})" + (f" — {description}" if description else ""))
+    return "\n".join(lines)
+
+
+def _inject_rollup(body: str, section: str) -> str:
+    """Replace any existing roll-up section in a body with a fresh one appended at the end."""
+    stripped = _ROLLUP_SECTION_PATTERN.sub("", body).rstrip()
+    return f"{stripped}\n\n{section}" if stripped else section
+
+
+def write_rollups(root: Path, result: IngestFolderResult, *, verbose: bool) -> None:
+    """Give every non-root folder with subfolders a roll-up index into its children.
+
+    Core behaviour (not a toggle): the archival hierarchy is only navigable if each level
+    describes the level beneath it. A folder that has its own documents gets a roll-up
+    section appended to its FolderSummary; a folder with only subfolders (no documents of
+    its own) gets a lightweight FolderIndex file. Neither re-extracts or inlines child
+    content, and files are only rewritten when their rendered text actually changes, so
+    unchanged runs stay no-ops. Processed deepest-first so child indexes exist before a
+    parent links them.
+    """
+    directories = sorted(
+        (
+            p
+            for p in root.rglob("*")
+            if p.is_dir() and not any(part.startswith(".") for part in p.relative_to(root).parts)
+        ),
+        key=lambda p: len(p.relative_to(root).parts),
+        reverse=True,
+    )
+    for directory in directories:
+        summary_path = folder_summary_path(directory)
+        if summary_path.name in RESERVED_CONCEPT_FILENAMES:
+            continue
+        child_paths = _immediate_child_concepts(directory)
+        existing = _folder_concept(directory)
+
+        if not child_paths:
+            # A former pure-parent whose children are all gone: drop its stale index.
+            if existing is not None and existing.frontmatter.type == FOLDER_INDEX_OKF_TYPE:
+                summary_path.unlink()
+                result.removed_paths.append(summary_path)
+            continue
+
+        section = _build_rollup_section(directory, child_paths)
+        if existing is not None and existing.frontmatter.type == FOLDER_SUMMARY_OKF_TYPE:
+            document = existing.model_copy(update={"body": _inject_rollup(existing.body, section)})
+        elif existing is not None and existing.frontmatter.type == FOLDER_INDEX_OKF_TYPE:
+            # Reuse the existing index (preserving its timestamp) so an unchanged run is a
+            # true no-op — recreating it would stamp a fresh datetime every time.
+            document = existing.model_copy(update={"body": section})
+        else:
+            relative_dir = directory.relative_to(root)
+            frontmatter = OKFFrontmatter(
+                type=FOLDER_INDEX_OKF_TYPE,
+                title=directory.name.replace("_", " ").title(),
+                description=f"Index of {len(child_paths)} subfolder(s) in {relative_dir or '.'}",
+                source=None,
+            )
+            document = OKFDocument(frontmatter=frontmatter, body=section)
+
+        rendered = document.to_markdown()
+        if summary_path.is_file() and summary_path.read_text(encoding="utf-8") == rendered:
+            continue
+        summary_path.write_text(rendered, encoding="utf-8")
+        if summary_path not in result.written_paths:
+            result.written_paths.append(summary_path)
+        if verbose:
+            print(f"  -> Roll-up {summary_path}")

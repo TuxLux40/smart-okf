@@ -28,6 +28,7 @@ from app.services.prompts import (
     load_dream_matter_prompt,
     load_dream_synthesis_prompt,
     load_extraction_prompt,
+    load_fact_verification_prompt,
     load_folder_summary_prompt,
     load_vision_extraction_prompt,
 )
@@ -225,3 +226,14 @@ class LLMClient:
         """
         system_prompt = load_dream_matter_prompt()
         return self.chat(system_prompt, group_text, max_tokens=max_tokens)
+
+    def verify_facts(self, source_text: str, extracted_markdown: str, *, max_tokens: int | None = None) -> str:
+        """Ask whether `extracted_markdown` is traceable to `source_text` — "OK" or "FLAGGED: <reason>".
+
+        Mandatory verification step, not a second extraction: bounded input (the source text
+        already read for the original extraction call, not re-read/re-OCR'd) and a one-line
+        output, so the cost is a small, fixed fraction of the extraction call it checks.
+        """
+        system_prompt = load_fact_verification_prompt()
+        user_prompt = f"SOURCE TEXT:\n{source_text}\n\nEXTRACTED MARKDOWN:\n{extracted_markdown}"
+        return self.chat(system_prompt, user_prompt, max_tokens=max_tokens)

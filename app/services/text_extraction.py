@@ -27,13 +27,41 @@ import pdfplumber
 from docx import Document as DocxDocument
 
 from app.constants import IMAGE_DOCUMENT_SUFFIXES, OCR_LANGUAGES, SUPPORTED_DOCUMENT_SUFFIXES, TEXT_FILE_ENCODING
-from app.exceptions import DocumentIngestError
+from app.exceptions import DocumentIngestError, EncryptedDocumentError
 from app.services.extraction_options import DEFAULT_EXTRACTION, ExtractionOptions
+
+_OLE_MAGIC = b"\xd0\xcf\x11\xe0"
+"""OLE2 compound-file header. Encrypted OOXML (.docx/.xlsx) is wrapped in this container
+instead of a ZIP, so a docx/xlsx starting with these bytes is password-protected."""
 
 
 def is_supported_document(file_path: Path) -> bool:
     """Return whether a file suffix is supported for ingest."""
     return file_path.suffix.lower() in SUPPORTED_DOCUMENT_SUFFIXES
+
+
+def _raise_if_encrypted(file_path: Path) -> None:
+    """Raise `EncryptedDocumentError` for a password-protected PDF or OOXML file.
+
+    Cheap header/parser probe run before extraction so a protected file is skipped with
+    a clear reason instead of failing deep inside marker/pdfplumber/openpyxl with an
+    opaque traceback. Only detects the common personal-document cases (encrypted PDF,
+    encrypted .docx/.xlsx); anything else falls through to normal extraction.
+    """
+    suffix = file_path.suffix.lower()
+    if suffix in {".docx", ".xlsx"} and file_path.read_bytes()[:4] == _OLE_MAGIC:
+        raise EncryptedDocumentError(f"{file_path} is password-protected (encrypted OOXML); skipped")
+    if suffix == ".pdf":
+        from pdfminer.pdfdocument import PDFDocument, PDFPasswordIncorrect
+        from pdfminer.pdfparser import PDFParser
+
+        with file_path.open("rb") as handle:
+            try:
+                PDFDocument(PDFParser(handle))
+            except PDFPasswordIncorrect as error:
+                raise EncryptedDocumentError(f"{file_path} is password-protected (encrypted PDF); skipped") from error
+            except Exception:  # noqa: BLE001 — not an encryption signal; let real extraction report it
+                return
 
 
 def extract_text_from_file(
@@ -48,6 +76,7 @@ def extract_text_from_file(
     `ExtractionOptions(use_marker=False)` (CLI: `--no-marker`) for pdfplumber/OCRmyPDF only.
     """
     suffix = file_path.suffix.lower()
+    _raise_if_encrypted(file_path)
     if suffix in IMAGE_DOCUMENT_SUFFIXES:
         return _extract_text_from_image(file_path)
     if suffix == ".pdf":

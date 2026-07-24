@@ -20,6 +20,7 @@ from pydantic import ValidationError
 from app.config import SmartOkfConfig
 from app.constants import LLM_LOG_FILENAME
 from app.services.extraction_options import ExtractionOptions
+from app.services.gating import GatingRules
 from app.services.ingest import IngestFolderResult, ingest_folder
 from app.services.llm_client import LLMClient
 from app.services.text_extraction import marker_available
@@ -63,6 +64,19 @@ def main() -> None:
         "instead. marker is used by default (layout-aware: tables, forms); onboarding installs "
         "its marker_single binary as a prerequisite.",
     )
+    parser.add_argument(
+        "--verify-host",
+        default=None,
+        help="OpenAI-compatible server URL for mandatory fact verification (default: "
+        "verify_host from config/env, falling back to the extractor's --host).",
+    )
+    parser.add_argument(
+        "--verify-model",
+        default=None,
+        help="Model for mandatory fact verification of every extraction (default: verify_model "
+        "from config/env, falling back to the extractor's --model). Verification always runs; "
+        "this only controls which model checks the extractor's output.",
+    )
     parser.add_argument("--quiet", action="store_true", help="Suppress per-file progress output")
     args = parser.parse_args()
 
@@ -83,6 +97,11 @@ def main() -> None:
     host: str | None = args.host or (config.llm_host if config is not None else None)
     model: str | None = args.model or (config.llm_model if config is not None else None)
     vision_model: str | None = args.vision_model or (config.vision_model if config is not None else None)
+    # Verify resolution mirrors dream's model/host fallback: CLI flag > verify_* (config/env)
+    # > extractor's own resolved host/model. Verification always runs (see extract_document);
+    # this only picks which model does the checking.
+    verify_host: str | None = args.verify_host or (config.verify_host if config is not None else None) or host
+    verify_model: str | None = args.verify_model or (config.verify_model if config is not None else None) or model
     use_marker = not args.no_marker and (config.use_marker if config is not None else True)
     if use_marker and not marker_available():
         parser.error(
@@ -91,25 +110,52 @@ def main() -> None:
         )
         return
     options = ExtractionOptions(use_marker=use_marker)
+    rules = GatingRules(
+        exclude_patterns=list(config.exclude_patterns) if config is not None else [],
+        low_priority_patterns=list(config.low_priority_patterns) if config is not None else [],
+        priority_patterns=list(config.priority_patterns) if config is not None else [],
+    )
+    derive_per_file = config.derive_per_file if config is not None else False
+    generate_readme = config.generate_readme if config is not None else True
 
     combined = IngestFolderResult(root=Path(folders[0]))
     for folder in folders:
         client = LLMClient(model=model, host=host, log_path=Path(folder) / LLM_LOG_FILENAME, vision_model=vision_model)
-        result = ingest_folder(folder, client=client, options=options, verbose=not args.quiet)
+        verify_client = (
+            client
+            if verify_model == model and verify_host == host
+            else LLMClient(model=verify_model, host=verify_host, log_path=Path(folder) / LLM_LOG_FILENAME)
+        )
+        result = ingest_folder(
+            folder,
+            client=client,
+            options=options,
+            verbose=not args.quiet,
+            verify_client=verify_client,
+            rules=rules,
+            derive_per_file=derive_per_file,
+            generate_readme=generate_readme,
+        )
         combined.written_paths.extend(result.written_paths)
         combined.unchanged_dirs.extend(result.unchanged_dirs)
         combined.skipped.extend(result.skipped)
         combined.removed_paths.extend(result.removed_paths)
+        combined.flagged.extend(result.flagged)
 
     if combined.skipped and not args.quiet:
         print(f"\n{len(combined.skipped)} file(s)/folder(s) skipped:")
         for path, reason in combined.skipped:
             print(f"  {path}: {reason}")
 
-    # 1 = bad root(s), 2 = partial (skips) so cron goes red instead of silently green, 0 = clean.
+    if combined.flagged and not args.quiet:
+        print(f"\n{len(combined.flagged)} file(s) flagged by fact verification (section still written):")
+        for path, reason in combined.flagged:
+            print(f"  {path}: {reason}")
+
+    # 1 = bad root(s), 2 = partial (skips/flags) so cron goes red instead of silently green.
     if not all(Path(f).is_dir() for f in folders):
         sys.exit(1)
-    sys.exit(2 if combined.skipped else 0)
+    sys.exit(2 if (combined.skipped or combined.flagged) else 0)
 
 
 if __name__ == "__main__":

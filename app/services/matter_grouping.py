@@ -11,23 +11,37 @@ groups, not number of aggregates.
 import re
 from pathlib import Path
 
-_NUMERIC_TOKEN = re.compile(r"\d{5,}")
+DEFAULT_MIN_TOKEN_DIGITS = 5
+"""Baseline minimum length for a numeric token to count as a shared identifier — the
+`provenance` ordering principle. `pertinence` lowers it (more, looser cross-folder
+groups); a stricter setting raises it. See `app/config.py::ordering_principle`."""
 
 
-def extract_numeric_tokens(text: str) -> set[str]:
-    """Return 5+ digit numeric substrings — likely contract/customer/meter/case IDs.
+def min_token_digits_for_principle(ordering_principle: str) -> int:
+    """Map an archival ordering principle to the shared-identifier minimum length.
 
-    5 digits is deliberately low: German utility/insurance/case references are
+    `provenance` (respect folders, conservative) keeps the default; `pertinence` (lean into
+    cross-folder subject synthesis) lowers the bar so weaker numeric matches also form
+    matters — the one concrete, measurable effect of the principle choice.
+    """
+    return 4 if ordering_principle == "pertinence" else DEFAULT_MIN_TOKEN_DIGITS
+
+
+def extract_numeric_tokens(text: str, *, min_digits: int = DEFAULT_MIN_TOKEN_DIGITS) -> set[str]:
+    """Return numeric substrings of at least `min_digits` digits — likely contract/customer/
+    meter/case IDs.
+
+    The default 5 is deliberately low: German utility/insurance/case references are
     commonly 6-10 digits, but shorter postal/customer codes exist too. False
     positives (e.g. a stray year-like number) just mean a slightly bigger deep-dive
     group — the deep-dive prompt is instructed to say "not the same matter" when the
     shared number turns out to be coincidental, rather than forcing a connection.
     """
-    return set(_NUMERIC_TOKEN.findall(text))
+    return set(re.findall(rf"\d{{{min_digits},}}", text))
 
 
-def group_by_shared_tokens(digests: dict[Path, str]) -> list[list[Path]]:
-    """Group aggregate paths that share at least one 5+ digit numeric token.
+def group_by_shared_tokens(digests: dict[Path, str], *, min_digits: int = DEFAULT_MIN_TOKEN_DIGITS) -> list[list[Path]]:
+    """Group aggregate paths that share at least one numeric token of `min_digits`+ digits.
 
     Union-find over token -> paths, so a token linking A-B and a different token
     linking B-C merge into one group {A, B, C}. Singletons (no shared token with
@@ -51,7 +65,7 @@ def group_by_shared_tokens(digests: dict[Path, str]) -> list[list[Path]]:
 
     token_to_paths: dict[str, list[Path]] = {}
     for path, text in digests.items():
-        for token in extract_numeric_tokens(text):
+        for token in extract_numeric_tokens(text, min_digits=min_digits):
             token_to_paths.setdefault(token, []).append(path)
 
     for paths in token_to_paths.values():

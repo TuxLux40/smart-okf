@@ -6,7 +6,7 @@ import openpyxl
 import pytest
 from docx import Document as DocxDocument
 
-from app.exceptions import DocumentIngestError
+from app.exceptions import DocumentIngestError, EncryptedDocumentError
 from app.services.text_extraction import extract_text_from_file, is_supported_document
 
 
@@ -45,6 +45,22 @@ def test_extract_text_from_docx_reads_paragraphs_and_tables(tmp_path: Path) -> N
     assert "Dear Oliver," in text
     assert "Invoice" in text
     assert "42" in text
+
+
+def test_encrypted_ooxml_is_detected_and_skipped(tmp_path: Path) -> None:
+    # Encrypted .docx/.xlsx are OLE2 compound files, not ZIPs — detect by the OLE magic header.
+    encrypted = tmp_path / "protected.docx"
+    encrypted.write_bytes(b"\xd0\xcf\x11\xe0" + b"\x00" * 512)
+    with pytest.raises(EncryptedDocumentError, match="password-protected"):
+        extract_text_from_file(encrypted)
+
+
+def test_encrypted_document_error_is_a_document_ingest_error(tmp_path: Path) -> None:
+    # Subtype relationship: ingest's broad DocumentIngestError/Exception catch still skips it.
+    encrypted = tmp_path / "protected.xlsx"
+    encrypted.write_bytes(b"\xd0\xcf\x11\xe0" + b"\x00" * 512)
+    with pytest.raises(DocumentIngestError):
+        extract_text_from_file(encrypted)
 
 
 def test_extract_text_from_xlsx_reads_cells(tmp_path: Path) -> None:

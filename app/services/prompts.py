@@ -4,11 +4,13 @@ from app.constants import (
     DEFAULT_DREAM_MATTER_PROMPT,
     DEFAULT_DREAM_SYNTHESIS_PROMPT,
     DEFAULT_EXTRACTION_PROMPT,
+    DEFAULT_FACT_VERIFICATION_PROMPT,
     DEFAULT_FOLDER_SUMMARY_PROMPT,
     DEFAULT_VISION_EXTRACTION_PROMPT,
     DREAM_MATTER_PROMPT_FILE,
     DREAM_SYNTHESIS_PROMPT_FILE,
     EXTRACTION_PROMPT_FILE,
+    FACT_VERIFICATION_PROMPT_FILE,
     FOLDER_SUMMARY_PROMPT_FILE,
     PROMPTS_DIR,
     VISION_EXTRACTION_PROMPT_FILE,
@@ -46,3 +48,8 @@ def load_dream_synthesis_prompt() -> str:
 def load_dream_matter_prompt() -> str:
     """Load the system prompt used to deep-dive one candidate cross-folder matter."""
     return load_prompt(DREAM_MATTER_PROMPT_FILE, fallback=DEFAULT_DREAM_MATTER_PROMPT)
+
+
+def load_fact_verification_prompt() -> str:
+    """Load the system prompt used to verify one extraction against its source text."""
+    return load_prompt(FACT_VERIFICATION_PROMPT_FILE, fallback=DEFAULT_FACT_VERIFICATION_PROMPT)

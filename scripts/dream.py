@@ -21,6 +21,7 @@ from pydantic import ValidationError
 from app.config import SmartOkfConfig
 from app.constants import LLM_LOG_FILENAME
 from app.services.dream import dream
+from app.services.gating import GatingRules
 from app.services.llm_client import LLMClient
 
 
@@ -84,10 +85,23 @@ def main() -> None:
         or ((config.dream_model or config.llm_model) if config is not None else None)
     )
 
+    rules = GatingRules(
+        low_priority_patterns=list(config.low_priority_patterns) if config is not None else [],
+        priority_patterns=list(config.priority_patterns) if config is not None else [],
+    )
+    ordering_principle = config.ordering_principle if config is not None else "provenance"
+
     exit_code = 0
     for folder in folders:
         client = LLMClient(model=model, host=host, log_path=Path(folder) / LLM_LOG_FILENAME)
-        result = dream(folder, client=client, force=args.force, verbose=not args.quiet)
+        result = dream(
+            folder,
+            client=client,
+            force=args.force,
+            verbose=not args.quiet,
+            rules=rules,
+            ordering_principle=ordering_principle,
+        )
         for error in result.errors:
             print(f"Error: {error}", file=sys.stderr)
         exit_code = max(exit_code, result.exit_code)

@@ -15,6 +15,9 @@ class _IngestStub:
     def summarize_sections(self, merged_sections: str) -> str:
         return "Orientation summary for this folder."
 
+    def verify_facts(self, source_text: str, extracted_markdown: str, *, max_tokens: int | None = None) -> str:
+        return "OK"
+
 
 class _DreamStub:
     def __init__(self) -> None:
@@ -90,6 +93,45 @@ def test_dream_is_incremental_and_force_overrides(tmp_path: Path) -> None:
     result = dream(str(tmp_path), client=forced, force=True)  # type: ignore[arg-type]
     assert result.unchanged is False
     assert len(forced.calls) == 1
+
+
+def test_dream_deprioritizes_trivial_folders_out_of_the_pass(tmp_path: Path) -> None:
+    _build_tree(tmp_path)
+    # A folder whose name carries a built-in trivial keyword is eagerly deprioritized.
+    handbuch = tmp_path / "handbuch"
+    handbuch.mkdir()
+    (handbuch / "manual.txt").write_text("router setup steps", encoding="utf-8")
+    ingest_folder(str(tmp_path), client=_IngestStub())  # type: ignore[arg-type]
+
+    result = dream(str(tmp_path), client=_DreamStub())  # type: ignore[arg-type]
+
+    # providers + finances feed dream; the handbuch aggregate does not.
+    assert result.aggregate_count == 2
+
+
+class _DeepDiveStub(_DreamStub):
+    def dream_matter(self, evidence: str, *, max_tokens: int | None = None) -> str:
+        return "### Matter\n\nACME dispute 1234.\n\n### Conflicts\n\nNone.\n\n### Actions\n\nFollow up."
+
+
+def test_pertinence_principle_forms_a_matter_from_a_shorter_shared_id(tmp_path: Path) -> None:
+    providers = tmp_path / "providers"
+    finances = tmp_path / "finances"
+    providers.mkdir()
+    finances.mkdir()
+    # A 4-digit shared id in the filename (so it lands in the digest's Sources line):
+    # ignored under provenance (5-digit floor), a matter under pertinence.
+    (providers / "contract_1234.txt").write_text("Kundennummer 1234 ACME", encoding="utf-8")
+    (finances / "statement_1234.txt").write_text("Zahlung ref 1234 ACME", encoding="utf-8")
+    ingest_folder(str(tmp_path), client=_IngestStub())  # type: ignore[arg-type]
+
+    dream(str(tmp_path), client=_DeepDiveStub(), ordering_principle="provenance")  # type: ignore[arg-type]
+    provenance_matters = list((tmp_path / "matters").glob("*.md")) if (tmp_path / "matters").is_dir() else []
+    assert provenance_matters == []  # 4-digit id below the conservative floor
+
+    dream(str(tmp_path), client=_DeepDiveStub(), ordering_principle="pertinence", force=True)  # type: ignore[arg-type]
+    pertinence_matters = list((tmp_path / "matters").glob("*.md")) if (tmp_path / "matters").is_dir() else []
+    assert pertinence_matters, "pertinence should have formed a matter from the 4-digit id"
 
 
 def test_dream_reruns_when_an_aggregate_changed(tmp_path: Path) -> None:

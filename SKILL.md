@@ -107,12 +107,33 @@ do not re-read every original PDF for facts that were already distilled.
    confirm the folder exists and looks like personal documents, not a code repo or media
    library.
 
-6. **Write `smart-okf.yaml`** in the skill root from what you learned (see
-   [smart-okf.example.yaml](smart-okf.example.yaml): `document_roots`, `llm_host`, `llm_model`,
-   optional `vision_model` / `dream_model` / `dream_host` / `use_marker`). Plain YAML —
-   write it directly; there is no `scripts/onboard.py`.
+6. **Ask which archival ordering principle governs** (`ordering_principle`, see
+   [docs/ARCHIVAL_PRINCIPLES.md](docs/ARCHIVAL_PRINCIPLES.md)). Both the per-folder aggregate
+   layer (provenance) and the cross-folder matter layer (pertinence) always run; this only
+   tunes how eagerly matters form across folders:
 
-7. Offer a first ingest on one subfolder as a smoke test before the whole tree — see
+   - **`provenance`** (default): respect the folder structure; only strong, longer shared
+     IDs link documents into a cross-folder matter. Best when their folders already map to
+     how they think.
+   - **`pertinence`**: lean into subject-based synthesis; shorter shared IDs also form
+     matters. Best when the same affair is scattered across many folders.
+
+7. **Ask what to keep out** (gating, deterministic — no LLM). Two independent lists:
+   `exclude_patterns` (glob) for documents never worth ingesting (manuals, terms of
+   service, marketing — e.g. `["*handbuch*", "*/AGB/*"]`), and `low_priority_patterns` for
+   things worth storing but not deep-analyzing. Built-in trivial keywords (AGB,
+   Bedienungsanleitung, …) are already deprioritized eagerly, so most users need only add
+   their own exceptions; `priority_patterns` forces something back into deep analysis.
+   Password-protected files are always skipped and logged automatically.
+
+8. **Write `smart-okf.yaml`** in the skill root from what you learned (see
+   [smart-okf.example.yaml](smart-okf.example.yaml): `document_roots`, `llm_host`, `llm_model`,
+   optional `vision_model` / `dream_model` / `dream_host` / `verify_model` / `verify_host` /
+   `use_marker` / `ordering_principle` / `exclude_patterns` / `low_priority_patterns` /
+   `priority_patterns` / `derive_per_file` / `generate_readme`). Plain YAML — write it
+   directly; there is no `scripts/onboard.py`.
+
+9. Offer a first ingest on one subfolder as a smoke test before the whole tree — see
    **Ingest cautions** below.
 
 ## Query (default operation)
@@ -127,7 +148,8 @@ vector DB: it is **whole-tree ripgrep + read + git**, with an explicit fallback 
 |------|--------|---------|
 | 0 | **Synthesis** (`<root>/synthesis.md`, `type: Synthesis`) | Cross-folder matters, conflicts, patterns, open actions — check first for any question that could span folders; it names the aggregates to read next |
 | 0.5 | **Matter files** (`<root>/matters/*.md`, `type: Matter`) | A specific cross-folder case already resolved to a dedicated file — check here when the synthesis or a shared ID points at one before reading every cited aggregate |
-| 1 | **Aggregates** (`**/*.md` with `type: FolderSummary`) | Distilled facts, tags, orientation summary, provenance — **always start here** for folder-level facts |
+| 0.8 | **Navigation / roll-up** (root `README.md`; parent `## Untergeordnete Ordner` sections; `type: FolderIndex` files) | Orient in an unfamiliar tree — the root README lists every folder with stats, and each folder with subfolders links down to its children. Use to find *which* aggregate to read, not as a fact source (it links, never duplicates) |
+| 1 | **Aggregates** (`**/*.md` with `type: FolderSummary`) | Distilled facts, tags, orientation summary, provenance — **always start here** for folder-level facts. A `_Verification: FLAGGED — <reason>_` line under a section means that extraction failed its fact check — treat it as untrusted; confirm against the transcript |
 | 2 | **Transcripts (mandatory fallback)** (`.okf-transcripts/`) | When MD is thin, partial, or missing a full ID/amount/quote — search here **before** re-ingest or guessing. Hidden folder; greppable; lossless raw extract |
 | 3 | **Git history** | “What’s new,” same-batch uploads, ID-tagged commits months later |
 | 4 | **JSONL** (`.okf-llm-log.jsonl`) | Ingest debugging only — **not** knowledge retrieval |
@@ -150,7 +172,11 @@ to prevent.
    ```
 
 2. **Read matching aggregates.** Frontmatter has `sources:`; body has orientation summary
-   (folders with 2+ docs), then `## <Title>` sections with `_Source: <filename>_`.
+   (folders with 2+ docs), then `## <Title>` sections with `_Source: <filename>_`. A section
+   may carry a `_Verification: FLAGGED — <reason>_` line right after its `_Source:` — every
+   extraction is checked against its own source before ingest writes it, and a flagged one is
+   kept (not silently dropped) but should not be treated as trustworthy without checking the
+   transcript/original yourself first.
 
 3. **Fallback to transcripts** if the aggregate is thin (partial ID, missing amount, exact
    quote, “not sure”): search `.okf-transcripts/`, not the binary original and not a re-ingest
@@ -219,6 +245,13 @@ Batch commits + shared IDs still matter for cases the free grouping pre-filter m
 git history, not raw PDFs. MCP is optional glue on a clone. See
 [README — Remote access via git](README.md#remote-access-via-git).
 Do not put personal case details in this skill file when documenting examples.
+
+**Consumer-only agents:** point them at the generated `scripts/dashboard.py` HTML file
+instead of a raw filesystem path when an agent should only ever *read* the KB. A static
+rendered page structurally can't be written back to through a "read this URL" tool the
+way a mounted folder can — read-only is enforced by what the interface *is*, not by a
+permission the agent has to respect. Also easier to hand an agent one link than a path
+plus "and browse it non-recursively" instructions.
 
 ## Ingest
 
@@ -361,6 +394,12 @@ Environment variables (or `smart-okf.yaml`, see [smart-okf.example.yaml](smart-o
 | `SMART_OKF_LLM_API_KEY`  | `not-needed`             | Only for servers that require auth |
 | `SMART_OKF_VISION_MODEL` | unset                    | Optional vision model on the same host for images |
 | `SMART_OKF_CONFIG`       | `smart-okf.yaml`         | Path to YAML config |
+
+YAML-only settings (no env var): `ordering_principle` (provenance/pertinence, see
+[docs/ARCHIVAL_PRINCIPLES.md](docs/ARCHIVAL_PRINCIPLES.md)); `exclude_patterns` /
+`low_priority_patterns` / `priority_patterns` (gating globs); `derive_per_file` (opt-in
+`.okf-facts/` sidecars); `generate_readme` (root navigation README, default on);
+`verify_model` / `verify_host` (mandatory fact-check model, defaults to the extractor).
 
 Remote (non-localhost/RFC1918) LLM hosts are refused unless `allow_remote_llm` is set — keeps
 raw document text off the cloud by default. The orchestrating agent can still be a cloud model;

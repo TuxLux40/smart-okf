@@ -48,6 +48,7 @@ from app.constants import (
 )
 from app.exceptions import LLMClientError
 from app.models.okf import OKFDocument, OKFFrontmatter
+from app.services.gating import GatingRules, is_deprioritized
 from app.services.ingest import hash_file, load_existing_summary
 from app.services.llm_client import LLMClient
 from app.services.matter_files import (
@@ -57,7 +58,7 @@ from app.services.matter_files import (
     matter_unchanged,
     write_matter_file,
 )
-from app.services.matter_grouping import group_by_shared_tokens, group_tokens
+from app.services.matter_grouping import group_by_shared_tokens, group_tokens, min_token_digits_for_principle
 
 DREAM_MAX_TOKENS = 4096
 """Synthesis is longer-form than per-document extraction; give it more output room."""
@@ -139,12 +140,18 @@ def dream(
     *,
     force: bool = False,
     verbose: bool = False,
+    rules: GatingRules | None = None,
+    ordering_principle: str = "provenance",
 ) -> DreamResult:
     """Run one dream pass over root's aggregates, writing/refreshing `<root>/synthesis.md`.
 
     Skips the LLM entirely when no aggregate changed since the last synthesis (unless
     `force`). Oversized digests are synthesized in batches, then consolidated with one
     final call over the partial syntheses.
+
+    `rules` deprioritizes low-value aggregates (manuals, terms, user low-priority patterns)
+    out of this expensive pass — they were still ingested, just not deeply analyzed.
+    `ordering_principle` tunes how loosely cross-folder matters form (`pertinence` = looser).
     """
     root = Path(root_folder).expanduser().resolve()
     result = DreamResult(root=root)
@@ -152,8 +159,13 @@ def dream(
         result.errors.append(f"{root} is not a directory")
         return result
 
+    gating_rules = rules or GatingRules()
     output_path = synthesis_path(root)
-    aggregates = [path for path in collect_aggregates(root) if path != output_path]
+    aggregates = [
+        path
+        for path in collect_aggregates(root)
+        if path != output_path and not is_deprioritized(str(path.parent.relative_to(root)), gating_rules)
+    ]
     result.aggregate_count = len(aggregates)
     if not aggregates:
         result.errors.append(f"no folder aggregates found under {root}; run ingest first")
@@ -180,7 +192,7 @@ def dream(
     llm_client = client or LLMClient(log_path=root / LLM_LOG_FILENAME)
     try:
         baseline_body = _synthesize(list(digest_map.values()), llm_client)
-        groups = group_by_shared_tokens(digest_map)
+        groups = group_by_shared_tokens(digest_map, min_digits=min_token_digits_for_principle(ordering_principle))
         if verbose and groups:
             print(f"  {len(groups)} candidate matter group(s) found — deep-diving...")
         body = _apply_deep_dives(baseline_body, groups, digest_map, root, llm_client, verbose=verbose)

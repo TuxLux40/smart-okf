@@ -2,7 +2,12 @@
 
 from pathlib import Path
 
-from app.services.matter_grouping import extract_numeric_tokens, group_by_shared_tokens, group_tokens
+from app.services.matter_grouping import (
+    extract_numeric_tokens,
+    group_by_shared_tokens,
+    group_tokens,
+    min_token_digits_for_principle,
+)
 
 
 def test_extract_numeric_tokens_finds_five_plus_digit_runs() -> None:
@@ -11,6 +16,27 @@ def test_extract_numeric_tokens_finds_five_plus_digit_runs() -> None:
     assert "999888777" in tokens
     assert "1122334455" in tokens
     assert "1234" not in tokens  # below the 5-digit floor
+
+
+def test_pertinence_lowers_the_token_floor_to_four_digits() -> None:
+    text = "kurz 1234 lang 999888"
+    assert "1234" not in extract_numeric_tokens(text)  # provenance default
+    assert "1234" in extract_numeric_tokens(text, min_digits=4)  # pertinence
+
+
+def test_min_token_digits_for_principle_maps_the_two_principles() -> None:
+    assert min_token_digits_for_principle("provenance") == 5
+    assert min_token_digits_for_principle("pertinence") == 4
+
+
+def test_pertinence_forms_a_group_a_conservative_run_would_miss() -> None:
+    digests = {
+        Path("a.md"): "customer 1234",
+        Path("b.md"): "ref 1234 again",
+    }
+    assert group_by_shared_tokens(digests) == []  # 4-digit token ignored at default floor
+    groups = group_by_shared_tokens(digests, min_digits=4)
+    assert len(groups) == 1
 
 
 def test_two_aggregates_sharing_a_token_form_one_group() -> None:

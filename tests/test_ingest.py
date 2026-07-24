@@ -18,6 +18,9 @@ class _StubLLMClient:
     def summarize_sections(self, merged_sections: str) -> str:
         return ""
 
+    def verify_facts(self, source_text: str, extracted_markdown: str, *, max_tokens: int | None = None) -> str:
+        return "OK"
+
 
 def test_folder_summary_path_is_folder_name_plus_md(tmp_path: Path) -> None:
     directory = tmp_path / "providers"
@@ -115,6 +118,9 @@ def test_inner_headings_are_demoted_so_sections_survive_reingest(tmp_path: Path)
         def summarize_sections(self, merged_sections: str) -> str:
             return ""
 
+        def verify_facts(self, source_text: str, extracted_markdown: str, *, max_tokens: int | None = None) -> str:
+            return "OK"
+
     (tmp_path / "doc.txt").write_text("content", encoding="utf-8")
     client = _HeadingClient()
     ingest_folder(str(tmp_path), client=client)  # type: ignore[arg-type]
@@ -163,6 +169,9 @@ def test_aggregate_prepends_synthesized_orientation_summary(tmp_path: Path) -> N
         def summarize_sections(self, merged_sections: str) -> str:
             return "Orientation: two documents about the same matter."
 
+        def verify_facts(self, source_text: str, extracted_markdown: str, *, max_tokens: int | None = None) -> str:
+            return "OK"
+
     (tmp_path / "a.txt").write_text("first", encoding="utf-8")
     (tmp_path / "b.txt").write_text("second", encoding="utf-8")
 
@@ -184,6 +193,9 @@ def test_aggregate_still_written_when_summary_synthesis_fails(tmp_path: Path) ->
 
         def summarize_sections(self, merged_sections: str) -> str:
             raise LLMClientError("boom")
+
+        def verify_facts(self, source_text: str, extracted_markdown: str, *, max_tokens: int | None = None) -> str:
+            return "OK"
 
     (tmp_path / "a.txt").write_text("first", encoding="utf-8")
     result = ingest_folder(str(tmp_path), client=_FailingSummaryClient())  # type: ignore[arg-type]
@@ -227,6 +239,9 @@ def test_oversized_document_is_chunked_and_merged_into_one_section(tmp_path: Pat
         def summarize_sections(self, merged_sections: str) -> str:
             return ""
 
+        def verify_facts(self, source_text: str, extracted_markdown: str, *, max_tokens: int | None = None) -> str:
+            return "OK"
+
     big_text = "This is a paragraph of text. " * 2000  # far exceeds CHUNK_CHAR_THRESHOLD
     (tmp_path / "big.txt").write_text(big_text, encoding="utf-8")
     client = _CountingChunkClient()
@@ -259,6 +274,9 @@ def test_image_routes_through_vision_model_when_configured(tmp_path: Path) -> No
         def summarize_sections(self, merged_sections: str) -> str:
             return ""
 
+        def verify_facts(self, source_text: str, extracted_markdown: str, *, max_tokens: int | None = None) -> str:
+            return "OK"
+
     (tmp_path / "meter.jpg").write_bytes(b"\xff\xd8\xff fake jpeg bytes")
     client = _VisionClient()
 
@@ -283,6 +301,9 @@ def test_image_falls_back_to_tesseract_when_no_vision_model(tmp_path: Path, monk
 
         def summarize_sections(self, merged_sections: str) -> str:
             return ""
+
+        def verify_facts(self, source_text: str, extracted_markdown: str, *, max_tokens: int | None = None) -> str:
+            return "OK"
 
     def _fake_extract_text_from_file(file_path: Path, options: object = None) -> str:
         assert file_path.suffix == ".jpg"
@@ -359,6 +380,9 @@ def test_arbitrary_exception_in_one_file_does_not_abort_run(tmp_path: Path) -> N
         def summarize_sections(self, merged_sections: str) -> str:
             return ""
 
+        def verify_facts(self, source_text: str, extracted_markdown: str, *, max_tokens: int | None = None) -> str:
+            return "OK"
+
     (tmp_path / "a.txt").write_text("fine content", encoding="utf-8")
     (tmp_path / "b.txt").write_text("boom", encoding="utf-8")
 
@@ -395,6 +419,9 @@ def test_backfill_skips_images_when_vision_model_configured(tmp_path: Path) -> N
         def summarize_sections(self, merged_sections: str) -> str:
             return ""
 
+        def verify_facts(self, source_text: str, extracted_markdown: str, *, max_tokens: int | None = None) -> str:
+            return "OK"
+
     (tmp_path / "meter.jpg").write_bytes(b"\xff\xd8\xff fake jpeg bytes")
     client = _VisionBackfillClient()
     ingest_folder(str(tmp_path), client=client)  # type: ignore[arg-type]
@@ -406,3 +433,151 @@ def test_backfill_skips_images_when_vision_model_configured(tmp_path: Path) -> N
     # Unchanged re-ingest must NOT backfill a contradicting tesseract transcript.
     ingest_folder(str(tmp_path), client=client)  # type: ignore[arg-type]
     assert not transcript.exists()
+
+
+class _FlaggingVerifyClient:
+    """A separate verify_client that always flags — used to test the verify_client override."""
+
+    def verify_facts(self, source_text: str, extracted_markdown: str, *, max_tokens: int | None = None) -> str:
+        return "FLAGGED: fabricated detail not present in source"
+
+
+def test_flagged_extraction_is_still_written_but_marked_and_reported(tmp_path: Path) -> None:
+    providers = tmp_path / "providers"
+    providers.mkdir()
+    (providers / "isp.txt").write_text("ISP contract details", encoding="utf-8")
+
+    result = ingest_folder(
+        str(tmp_path),
+        client=_StubLLMClient(),  # type: ignore[arg-type]
+        verify_client=_FlaggingVerifyClient(),  # type: ignore[arg-type]
+    )
+
+    assert result.written_paths == [providers / "providers.md"]
+    assert len(result.flagged) == 1
+    flagged_path, reason = result.flagged[0]
+    assert flagged_path == providers / "isp.txt"
+    assert reason == "fabricated detail not present in source"
+    assert result.exit_code == 2
+
+    aggregate_text = (providers / "providers.md").read_text(encoding="utf-8")
+    assert "_Verification: FLAGGED — fabricated detail not present in source_" in aggregate_text
+
+
+def test_no_separate_verify_client_still_verifies_against_extractor_client(tmp_path: Path) -> None:
+    class _SelfFlaggingClient:
+        def extract_structured(self, raw_text: str, context: str = "") -> str:
+            return f"---\ntype: Fact\ndescription: extracted\n---\n\nExtracted: {raw_text.strip()}"
+
+        def summarize_sections(self, merged_sections: str) -> str:
+            return ""
+
+        def verify_facts(self, source_text: str, extracted_markdown: str, *, max_tokens: int | None = None) -> str:
+            return "FLAGGED: made up a number"
+
+    providers = tmp_path / "providers"
+    providers.mkdir()
+    (providers / "isp.txt").write_text("ISP contract details", encoding="utf-8")
+
+    result = ingest_folder(str(tmp_path), client=_SelfFlaggingClient())  # type: ignore[arg-type]
+
+    assert len(result.flagged) == 1
+    assert result.exit_code == 2
+
+
+def test_excluded_file_is_not_ingested_and_logged_as_skipped(tmp_path: Path) -> None:
+    from app.services.gating import GatingRules
+
+    providers = tmp_path / "providers"
+    providers.mkdir()
+    (providers / "contract.txt").write_text("real contract details", encoding="utf-8")
+    (providers / "router-handbuch.txt").write_text("manual boilerplate", encoding="utf-8")
+
+    rules = GatingRules(exclude_patterns=["*handbuch*"])
+    result = ingest_folder(str(tmp_path), client=_StubLLMClient(), rules=rules)  # type: ignore[arg-type]
+
+    aggregate = (providers / "providers.md").read_text(encoding="utf-8")
+    assert "contract.txt" in aggregate
+    assert "handbuch" not in aggregate
+    assert any("router-handbuch.txt" in str(path) for path, _ in result.skipped)
+    assert result.exit_code == 2
+
+
+def test_derive_per_file_disabled_writes_no_facts_sidecar(tmp_path: Path) -> None:
+    providers = tmp_path / "providers"
+    providers.mkdir()
+    (providers / "isp.txt").write_text("ISP contract details", encoding="utf-8")
+
+    ingest_folder(str(tmp_path), client=_StubLLMClient())  # type: ignore[arg-type]
+
+    assert not (tmp_path / ".okf-facts" / "providers" / "isp.txt.md").exists()
+
+
+def test_derive_per_file_enabled_writes_facts_sidecar_on_extraction(tmp_path: Path) -> None:
+    # Written during actual extraction only — an unchanged re-ingest reuses the section
+    # without an LLM call, same as transcripts (no expensive re-extraction backfill).
+    providers = tmp_path / "providers"
+    providers.mkdir()
+    (providers / "isp.txt").write_text("ISP contract details", encoding="utf-8")
+
+    ingest_folder(str(tmp_path), client=_StubLLMClient(), derive_per_file=True)  # type: ignore[arg-type]
+
+    facts = tmp_path / ".okf-facts" / "providers" / "isp.txt.md"
+    assert facts.is_file()
+    assert "type: Fact" in facts.read_text(encoding="utf-8")
+
+
+def test_rollup_section_added_to_parent_with_subfolders(tmp_path: Path) -> None:
+    health = tmp_path / "health"
+    visits = health / "visits"
+    visits.mkdir(parents=True)
+    (health / "overview.txt").write_text("health overview", encoding="utf-8")
+    (visits / "checkup.txt").write_text("checkup notes", encoding="utf-8")
+
+    ingest_folder(str(tmp_path), client=_StubLLMClient())  # type: ignore[arg-type]
+
+    parent = (health / "health.md").read_text(encoding="utf-8")
+    assert "## Untergeordnete Ordner" in parent
+    assert "[visits](visits/visits.md)" in parent
+
+
+def test_pure_parent_folder_gets_folder_index(tmp_path: Path) -> None:
+    year = tmp_path / "health" / "2026"
+    befunde = year / "befunde"
+    befunde.mkdir(parents=True)
+    (befunde / "result.txt").write_text("lab result", encoding="utf-8")
+
+    ingest_folder(str(tmp_path), client=_StubLLMClient())  # type: ignore[arg-type]
+
+    index = year / "2026.md"
+    assert index.is_file()
+    text = index.read_text(encoding="utf-8")
+    assert "type: FolderIndex" in text
+    assert "[befunde](befunde/befunde.md)" in text
+
+
+def test_rollup_is_idempotent_across_unchanged_reingest(tmp_path: Path) -> None:
+    health = tmp_path / "health"
+    visits = health / "visits"
+    visits.mkdir(parents=True)
+    (health / "overview.txt").write_text("health overview", encoding="utf-8")
+    (visits / "checkup.txt").write_text("checkup notes", encoding="utf-8")
+
+    ingest_folder(str(tmp_path), client=_StubLLMClient())  # type: ignore[arg-type]
+    first = (health / "health.md").read_text(encoding="utf-8")
+    ingest_folder(str(tmp_path), client=_StubLLMClient())  # type: ignore[arg-type]
+    second = (health / "health.md").read_text(encoding="utf-8")
+
+    assert first == second
+
+
+def test_ingest_generates_navigation_readme_by_default(tmp_path: Path) -> None:
+    providers = tmp_path / "providers"
+    providers.mkdir()
+    (providers / "isp.txt").write_text("ISP contract details", encoding="utf-8")
+
+    ingest_folder(str(tmp_path), client=_StubLLMClient())  # type: ignore[arg-type]
+
+    readme = tmp_path / "README.md"
+    assert readme.is_file()
+    assert "knowledge base" in readme.read_text(encoding="utf-8")

@@ -16,8 +16,23 @@ DEFAULT_LINK_LABEL = "Related"
 FOLDER_SUMMARY_OKF_TYPE = "FolderSummary"
 """Frontmatter `type` for the one aggregate concept written per folder (non-recursive)."""
 
+FOLDER_INDEX_OKF_TYPE = "FolderIndex"
+"""Frontmatter `type` for a roll-up index: a parent folder that has subfolders with
+aggregates but no directly-contained documents of its own. Findbuch-Prinzip — it links
+down to child aggregates without duplicating their content, so it carries no `sources`
+(unlike FolderSummary). Excluded from the `dream` pass (navigation, not content)."""
+
+ROLLUP_HEADING = "## Untergeordnete Ordner"
+"""Body section listing links to child-folder aggregates. Injected into a folder's
+FolderSummary aggregate when it has subfolders, or the whole body of a FolderIndex."""
+
 TRANSCRIPTS_DIR_NAME = ".okf-transcripts"
 """Hidden root-level folder mirroring the tree with full raw extracted text per source file."""
+
+FACTS_DIR_NAME = ".okf-facts"
+"""Hidden root-level folder mirroring the tree with one derived-facts `.md` per source file,
+written only when `derive_per_file` is enabled. The facts also live in the folder aggregate;
+this is the opt-in per-document artifact for callers who want it."""
 
 INDEX_FILENAME = "index.md"
 LOG_FILENAME = "log.md"
@@ -80,6 +95,19 @@ DEFAULT_VISION_EXTRACTION_PROMPT = (
     "Transcribe all legible text in this image verbatim, including handwriting and numbers. "
     "Then briefly describe the scene (setting, objects, what kind of document/photo this is)."
 )
+
+FACT_VERIFICATION_PROMPT_FILE = "fact_verification.md"
+DEFAULT_FACT_VERIFICATION_PROMPT = (
+    "You verify that an extraction accurately reflects its source. Given SOURCE TEXT and "
+    "EXTRACTED MARKDOWN, respond with exactly 'OK' if every fact in the extraction is "
+    "actually present in the source and nothing is fabricated, templated, or repeated, or "
+    "'FLAGGED: <short reason>' otherwise. Be strict: every extracted fact must be traceable "
+    "to the source text."
+)
+
+VERIFICATION_FLAGGED_MARKER = "FLAGGED"
+"""Prefix the verifier responds with when an extraction doesn't hold up — everything after
+the marker (colon/dash-stripped) becomes the human-readable reason."""
 
 IMAGE_DOCUMENT_SUFFIXES = frozenset({".png", ".jpg", ".jpeg"})
 """Standalone images: OCRed via tesseract by default, or via a vision-capable chat model

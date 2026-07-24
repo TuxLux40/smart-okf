@@ -432,6 +432,173 @@ Real personal content from the reference document (names, addresses, exact figur
 reproduced anywhere in this repo — same "no personal case names published" rule as always;
 only the structural/density lessons went into the prompt.
 
+### 2026-07-24: static read-only dashboard shipped
+
+**Problem.** A quick way to browse the KB (which aggregates exist, what's in them),
+see the git timeline, and check the resolved config (which model/host is active,
+what cron entries reference this project) required either raw `find`/`cat`/`git log`
+or opening every file by hand.
+
+**Explicitly not a webapp.** The project's own principle ("No webapp/daemon — skill
++ cron CLI") was checked against this directly before building it: the distinguishing
+line isn't "does it render in a browser," it's "does anything listen on a socket or
+hold write access to config." `scripts/dashboard.py` writes one self-contained static
+HTML file (`app/services/dashboard.py` does the collection + rendering, inline
+CSS/JS, zero CDN dependencies) and exits — same shape as `skill-creator`'s
+`generate_review.py --static`. Nothing in this repo serves it; the user can open the
+file directly or point any static file server (`python -m http.server`, Caddy) at it
+over Tailscale/LAN themselves, entirely outside smart-okf's process.
+
+**Config is display-only, deliberately.** Writing config changes back through the
+page is exactly the point where this would become the webapp the project isn't —
+editing stays `smart-okf.yaml`/CLI flags, same as before this feature existed.
+
+**Contents:** an MD browser (every OKF markdown file under the root, `<details>`
+per file — native HTML disclosure widgets, no JS framework — with a plain-JS
+substring filter over type/title/path), `git log --graph --all --decorate` capped
+at 200 commits rendered verbatim in a `<pre>` block (no graph-drawing library —
+git's own ASCII graph is already the graph), and a config/cron summary
+(`SmartOkfConfig` resolved fields + crontab lines mentioning this project's scripts).
+
+### 2026-07-24: plausibility validator shipped
+
+**Problem, surfaced by a real incident, not hypothetical.** A large manual extraction
+batch over real personal documents (a Claude subagent standing in for the pipeline on
+this session's hardware) produced 41 aggregates that looked like real `FolderSummary`
+documents — valid frontmatter, plausible German titles — but were in fact one
+generic templated sentence each, `sources: []` or uncited, never actually read from
+the source files. Nothing in the codebase would have caught this short of a human
+reading every aggregate.
+
+**Shipped:** `app/services/validation.py` — deterministic, no-LLM heuristic checks
+against any `FolderSummary`/`Matter` document: `sources:` non-empty, every listed
+source has a matching `_Source:` line in the body, and body length is at least
+~80 characters per source (below that, a body reads as a one-line placeholder
+regardless of source count — calibrated against the real fabricated aggregates,
+which averaged 20-30 chars/source vs. hundreds for genuine ones). `scripts/validate_okf.py`
+walks a root and reports only the flagged files. Explicitly out of scope: judging
+*correctness* of extracted facts (needs the source documents and a human, or a much
+more expensive LLM-judge pass) — this only catches the shape a fabricated or
+skipped extraction takes, which turned out to be the actual failure mode encountered.
+
+**Deliberately not an LLM-graded eval harness.** `skill-creator`'s eval mechanism
+(assertions with `text`/`passed`/`evidence`, grader subagents, benchmark aggregation,
+browser review) was considered as a model — its assertion shape is reused directly
+here — but the with/without-skill comparison, browser viewer, and description-
+optimization loop don't apply to a data pipeline that isn't a skill being authored/
+tuned; only the "verify programmatically what's objectively checkable" principle
+carried over.
+
+**Extended same day: four more checks, one real bug fixed, from a real ingest run.**
+Running the actual pipeline (not a subagent) against real health documents with a
+genuinely too-small local model (`llama-3.2-1b-instruct`) surfaced a *different*
+failure shape than the templated-placeholder one above: repetition loops (the same
+paragraph restated a dozen times with only a timestamp changing until the model hit
+its token limit), nested frontmatter blocks pasted verbatim from the model's own
+extraction sub-prompt, literal template placeholders (`source: path/to/...`,
+`title: ...`), and chat-reply meta-commentary ("Here is the output in valid OKF
+markdown:"). All four are structural — no second LLM call needed, same "programmatic
+check" principle as the original three. Explicitly rejected: having a second model
+re-grade every aggregate, which would double the token/time cost of every ingest run
+for a correctness check that still can't verify facts without the source and a human
+anyway — a bounded, structural check is nearly free by comparison.
+
+**Bug found and fixed against real data the same day:** the citation check assumed
+`Matter` documents cite sources the same way `FolderSummary` aggregates do (a
+`_Source: <filename>_` marker line). They don't — `matter_files.write_matter_file`'s
+own "## Involved aggregates" link list plus the deep-dive's free-form "Quelle:
+*path*" prose is a different, source-*aggregate*-path convention, not the
+source-*document*-filename one. The check now branches on `frontmatter.type`;
+without this fix a genuinely good `Matter` file (real names, dates, diagnoses,
+correctly cross-referencing three aggregates) was flagged as broken purely for
+citing correctly-per-its-own-convention rather than incorrectly.
+
+### 2026-07-24: four-pass model, roll-up, navigation, gating, archival principles
+
+**Context.** A design conversation settled the pipeline's shape as four named passes and
+added the pieces that were missing to make it a coherent archival tool rather than just an
+extractor. Terminology is now fixed and used across code/docs: **extract → derive →
+aggregate (incl. roll-up) → dream**. See `docs/EVAL_PASSES_AND_GATING.md` for the
+acceptance spec and `docs/ARCHIVAL_PRINCIPLES.md` for the theory.
+
+**derive is always on; only the per-file artifact is opt-in.** Derived facts (contacts,
+IDs, amounts) were already written into the folder aggregate — that stays mandatory. The
+user explicitly did not want a file per document by default, so the only new toggle is
+`derive_per_file` → `.okf-facts/<file>.md` (additive; the aggregate is unchanged). Written
+on real extraction only, not backfilled on unchanged re-ingest (same rule as transcripts —
+no expensive re-extraction just to materialize a sidecar).
+
+**Roll-up is core, not optional.** The user pushed back on making it a toggle: an archival
+hierarchy is only navigable if each level describes the one beneath it (Findbuch-Prinzip).
+So `write_rollups` runs unconditionally after ingest — a folder with subfolders gets a
+`## Untergeordnete Ordner` section (its FolderSummary), or a new `type: FolderIndex` file
+when it is a pure parent with no documents of its own. It **links** children with a
+one-line description each and never inlines/re-summarizes them, so it adds no LLM cost and
+stays incremental. Idempotency was the subtle part: reusing an existing FolderIndex instead
+of recreating it (which would stamp a fresh `timestamp` every run and re-trigger dream) and
+only writing when the rendered text actually changes. FolderIndex is excluded from dream
+(`collect_aggregates` filters on FolderSummary) and from the validator
+(`VALIDATABLE_OKF_TYPES`) — it is navigation, carries no `sources`, and needs no plausibility
+check.
+
+**Self-updating navigation README.** `app/services/navigation.py` regenerates a plain-
+Markdown `README.md` at the root on each ingest: per-folder links + at-a-glance stats
+(document/folder/matter counts, flagged count, synthesis presence). Aimed at humans
+browsing in Nextcloud/a file UI, distinct from the agent-facing aggregates and the HTML
+dashboard. Safety: it writes only a file that does not exist or already bears its generated
+marker on line 1 — a hand-written README is detected and left untouched (returns None).
+
+**Gating — appraisal/Kassation.** `app/services/gating.py`, deterministic (no LLM):
+`exclude_patterns` skip junk (manuals, terms) from ingest entirely (logged, exit 2);
+`is_deprioritized` keeps low-value docs out of the expensive `dream` pass *eagerly* — a
+built-in trivial-keyword list (AGB, Bedienungsanleitung, …) plus user low-priority patterns
+deprioritize by default, and only an explicit priority pattern overrides. Password-protected
+PDFs/OOXML are detected up front (`EncryptedDocumentError`, a `DocumentIngestError` subtype)
+and skipped with a clear reason instead of failing deep in a parser.
+
+**Archival principle switch, made to actually do something.** `ordering_principle`
+(`provenance` default / `pertinence`) was at risk of being decorative. It is wired to one
+concrete, measurable effect: the minimum shared-identifier digit length in
+`matter_grouping` (5 for provenance, 4 for pertinence), so pertinence forms more/looser
+cross-folder matters. Onboarding asks for it; `dream` honours it. The self-contained
+principles doc (`docs/ARCHIVAL_PRINCIPLES.md`) states the methodology inline rather than
+referencing the separate (possibly-unpublished) file-organization skill, and reaffirms the
+hard constraint that smart-okf never moves/renames the user's source files.
+
+### 2026-07-24: mandatory fact verification shipped — supersedes "no LLM-judge" call above
+
+**Problem, stated directly by the user.** The plausibility validator above was assumed
+to *be* the correctness judge; it isn't and was never meant to be — it only catches
+structural shapes (empty, templated, repeated, leaked-prompt), not "did the model
+state something the source never said." Told explicitly: this check must never be
+optional, and correctness of extracted facts outranks compute cost, though cost
+should still be minimized within that constraint. This directly reverses the
+"explicitly rejected: having a second model re-grade every aggregate" call in the
+validator entry above — that rejection assumed correctness-checking wasn't worth
+doubling per-run cost; the user's priority ordering (correct facts first, cost
+second) says otherwise, so the second-model check is now mandatory, not rejected.
+
+**Shipped:** `app/services/fact_verification.py` (`verify_extraction`) calls a model
+once per already-extracted document — reusing the source text already read for that
+document's own extraction call, not a re-read/re-OCR and not a second full
+extraction — and asks it to answer `OK` or `FLAGGED: <reason>` against
+`prompts/fact_verification.md`. This runs unconditionally in `ingest.py`'s
+`extract_document`/`_ingest_directory`, for every document, every run; there is no
+flag to turn it off. A flagged document is *not* dropped (same "surface stale-but-
+present data over silently discarding it" principle used elsewhere in this
+pipeline) — its aggregate section is still written, with a
+`_Verification: FLAGGED — <reason>_` line directly under its `_Source:` marker, and
+the file/reason pair is collected in `IngestFolderResult.flagged`, which now also
+sets exit code 2 (same "partial success, not silently green" signal as `skipped`).
+
+**Cost kept to the minimum the mandate allows.** One short call per document (not
+per chunk, not a whole-tree re-analysis), with its own `verify_model`/`verify_host`
+config fields (mirroring `dream_model`/`dream_host`) so a cheap, fast model can do
+the checking even when a bigger model does the extracting — or the same model can
+verify itself (default: falls back to `llm_model`/`llm_host`) when only one model is
+available, which still catches obviously-broken shapes even though it can't catch a
+mistake that model is systematically prone to making.
+
 ### 2026-07-23: per-matter concept files shipped (R2)
 
 **Problem.** `synthesis.md` (R2b) is regenerated wholesale on every dream run — a good

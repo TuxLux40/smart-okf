@@ -119,6 +119,55 @@ class SmartOkfConfig(BaseSettings):
     remote-host gate as `llm_host` (`allow_remote_llm` + allowlist): dream input is
     digests of personal aggregates — distilled, but still personal data."""
 
+    verify_model: str | None = None
+    """Model for mandatory post-extraction fact verification (`app/services/fact_verification.py`).
+    None (default) uses `llm_model` — the same model verifies its own output, which catches
+    obviously-broken shapes (fabrication, template echo) but can't catch a mistake the same
+    model is systematically prone to; point this at a different/bigger model if the extractor
+    is weak enough that self-verification isn't trustworthy."""
+
+    verify_host: str | None = None
+    """Server for the verify model. None (default) uses `llm_host`. Subject to the same
+    remote-host gate as `llm_host` (`allow_remote_llm` + allowlist): verification input is
+    the same raw source text the extractor already saw."""
+
+    exclude_patterns: list[str] = Field(default_factory=list)
+    """Glob patterns (root-relative path or bare filename) for files never ingested — e.g.
+    `["*handbuch*", "*/AGB/*"]`. For documents with no durable personal facts (manuals,
+    terms, marketing). See `app/services/gating.py`."""
+
+    low_priority_patterns: list[str] = Field(default_factory=list)
+    """Glob patterns for files ingested normally but kept out of the deep `dream` pass."""
+
+    priority_patterns: list[str] = Field(default_factory=list)
+    """Glob patterns forcing deep analysis — overrides low-priority patterns and the
+    built-in trivial-name heuristic (`gating.DEFAULT_TRIVIAL_KEYWORDS`)."""
+
+    ordering_principle: str = "provenance"
+    """Governing archival principle (asked at onboarding, see docs/ARCHIVAL_PRINCIPLES.md).
+    `provenance` (default, conservative): respect the folder-of-origin structure; only
+    strong cross-folder ID matches form matters. `pertinence` (eager): lean harder on
+    cross-folder subject synthesis — weaker ID matches also form matters. Concretely tunes
+    the minimum shared-identifier length in `matter_grouping`."""
+
+    derive_per_file: bool = False
+    """Also emit one derived-facts file per source document (`.okf-facts/<file>.md`) in
+    addition to the facts already written into the folder aggregate. Off by default: the
+    aggregate is the primary artifact; per-file files are for callers who want them."""
+
+    generate_readme: bool = True
+    """Write/refresh a human-facing `README.md` at the documents root after ingest — a
+    self-updating navigation index with per-folder links and at-a-glance statistics
+    (browsable in a file UI / Nextcloud). See `app/services/navigation.py`."""
+
+    @field_validator("ordering_principle")
+    @classmethod
+    def validate_ordering_principle(cls, v: str) -> str:
+        """Only the two archival ordering principles are valid."""
+        if v not in {"provenance", "pertinence"}:
+            raise ValueError(f"ordering_principle must be 'provenance' or 'pertinence', got {v!r}")
+        return v
+
     @field_validator("document_roots", mode="before")
     @classmethod
     def validate_document_roots(cls, v: list[Path | str]) -> list[Path]:
@@ -128,7 +177,7 @@ class SmartOkfConfig(BaseSettings):
             raise ValueError("document_roots must contain at least one path")
         return roots
 
-    @field_validator("llm_host", "dream_host")
+    @field_validator("llm_host", "dream_host", "verify_host")
     @classmethod
     def validate_llm_host(cls, v: str | None, info: ValidationInfo) -> str | None:
         """Reject non-allowlisted remote hosts unless `allow_remote_llm` is set."""

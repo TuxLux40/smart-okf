@@ -81,3 +81,25 @@ def test_dream_host_remote_allowed_with_allow_remote_llm() -> None:
 def test_dream_host_local_allowed_by_default() -> None:
     config = _config(dream_host="http://192.168.178.2:8080")
     assert config.dream_host == "http://192.168.178.2:8080"
+
+
+def test_ordering_principle_defaults_to_provenance() -> None:
+    assert _config().ordering_principle == "provenance"
+
+
+def test_ordering_principle_accepts_pertinence() -> None:
+    assert _config(ordering_principle="pertinence").ordering_principle == "pertinence"
+
+
+def test_ordering_principle_rejects_unknown_value() -> None:
+    with pytest.raises(ValidationError, match="ordering_principle"):
+        _config(ordering_principle="thematic")
+
+
+def test_gating_and_derive_defaults() -> None:
+    config = _config()
+    assert config.exclude_patterns == []
+    assert config.low_priority_patterns == []
+    assert config.priority_patterns == []
+    assert config.derive_per_file is False
+    assert config.generate_readme is True

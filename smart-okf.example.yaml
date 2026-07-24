@@ -18,6 +18,33 @@ llm_model: gemma-4-e4b-it-qat
 # dream_model: qwen3-30b-a3b
 # dream_host: http://192.168.178.50:8080
 
+# Verifier: model for the mandatory post-extraction fact check (always runs). Defaults to
+# llm_model/llm_host. Point at a different/bigger model if the extractor is weak enough that
+# self-verification isn't trustworthy. A remote verify_host needs allow_remote_llm: true.
+# verify_model: qwen2.5:7b
+# verify_host: http://192.168.178.50:8080
+
 # Layout-aware PDF backend via external `marker_single` CLI (pipx install marker-pdf).
 # Not a pip dependency of this repo. Set false / pass --no-marker to use pdfplumber+OCRmyPDF only.
 # use_marker: true
+
+# Archival ordering principle: 'provenance' (default, respect folders — conservative matter
+# forming) or 'pertinence' (lean into cross-folder subject synthesis). See
+# docs/ARCHIVAL_PRINCIPLES.md. Only affects how eagerly the dream pass links matters.
+# ordering_principle: provenance
+
+# Gating (deterministic, no LLM). Glob patterns match the root-relative path or bare filename.
+# exclude_patterns:      # never ingested at all (manuals, terms, marketing)
+#   - "*handbuch*"
+#   - "*/AGB/*"
+# low_priority_patterns: # ingested, but kept out of the deep dream pass
+#   - "archive/*"
+# priority_patterns:     # forced into deep analysis (overrides low-priority + built-in trivial words)
+#   - "*aktenzeichen*"
+
+# Also write one derived-facts file per document under .okf-facts/ (facts are always in the
+# folder aggregate regardless; this is the opt-in per-file artifact). Default false.
+# derive_per_file: false
+
+# Regenerate a human navigation README.md at the documents root on each ingest. Default true.
+# generate_readme: true
