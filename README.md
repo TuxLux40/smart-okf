@@ -1,7 +1,3 @@
-<div align="center">
-
----
-
 ## 🧩 The problem, in plain terms
 
 You have folders full of documents — insurance letters, doctor's reports, contracts, tax forms, government mail. When you need *"what's my policy number?"* or *"when did that dispute with the electricity company start?"*, you dig through PDFs by hand. And when you ask an AI assistant, it re-reads the same scanned files from scratch every single time — slowly, and often getting numbers wrong.
@@ -56,11 +52,13 @@ documents/
 
 ## 🚀 Quick start
 
-> 💡 **Easiest path:** just ask a Claude Code agent to *"set up smart-okf for my documents"* — it walks you through everything in [`SKILL.md`](SKILL.md#onboarding-first-run), including cloning, which model to use, and what to skip.
+**1. Install** — one command, like any other [agent skill](https://github.com/vercel-labs/skills):
 
-**1. Interview** — a Claude Code agent asks a few questions (document folder, local LLM host/model, privacy level) and does the install (clone, `uv sync`, skill symlink) for you.
+```bash
+npx skills add TuxLux40/smart-okf
+```
 
-**2. First ingest** — the agent runs it on a small test sub-folder first, then the full tree once you're happy with the result.
+**2. Interview** — ask your agent *"set up smart-okf for my documents"*. It walks you through the rest in [`SKILL.md`](SKILL.md#onboarding-first-run): `uv sync`, which local LLM host/model to use, privacy level, and a test ingest on one small sub-folder first.
 
 **3. Ask questions** — through your AI assistant, or just with a text search:
 
@@ -77,7 +75,7 @@ uv run python scripts/dream.py /path/to/your/documents   # writes synthesis.md +
 <details>
 <summary>Prefer manual install / no agent available?</summary>
 
-Needs [uv](https://docs.astral.sh/uv/) and any local LLM server such as [LM Studio](https://lmstudio.ai/), [Ollama](https://ollama.com/), or llama.cpp:
+Needs [uv](https://docs.astral.sh/uv/) and any local LLM server such as [LM Studio](https://lmstudio.ai/), [Ollama](https://ollama.com/), or [llama.cpp](https://github.com/ggml-org/llama.cpp):
 
 ```bash
 git clone https://github.com/TuxLux40/smart-okf.git
