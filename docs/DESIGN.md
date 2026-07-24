@@ -627,6 +627,33 @@ behind config would have added a decision point with no real tradeoff behind it.
 2026-07-18 design sketch (an ingest-time consolidation pass, `app/services/consolidate.py`)
 that this superseded.
 
+### 2026-07-24: config moved into the document root (`.smart-okf/config.yaml`), `document_roots` dropped
+
+**Problem.** Config lived on the machine running the scripts (`smart-okf.yaml` in the skill
+repo root, or `~/.config/smart-okf/`) — never on the tree it configured. Pushing a document
+root to a private git remote (README — Remote access via git) left the receiving agent/machine
+with no `llm_host`/`gating`/`ordering_principle` settings for that tree; `document_roots` being
+a list also implied one config could span multiple, unrelated document trees, which never
+matched reality — each root is its own independent knowledge base (confirmed: no cross-root
+linking in smart-okf itself, that happens at query time if an orchestrator like OpenWebUI
+references multiple KBs in one chat).
+
+**Shipped:** `app/config.py`'s `document_roots` field and its validator are gone.
+`load_config(root: Path)` replaces the old bare `SmartOkfConfig()` call in every script
+(`ingest_folder.py`, `dream.py`, `dashboard.py`) — it reads `<root>/.smart-okf/config.yaml`
+specifically, returning `None` if that file doesn't exist (checked explicitly, since every
+field now has a default and nothing raises `ValidationError` on a merely-missing file
+anymore). `SMART_OKF_CONFIG` still works as an explicit override to point at a file
+elsewhere. `scripts/validate_okf.py` needed no config at all and lost its `_load_config()`
+entirely. The `folder` CLI argument is now required on all four scripts — there is no more
+"omit the path to sweep every configured root" mode; a second, unrelated document root is a
+separate onboarding run with its own `.smart-okf/config.yaml`, and a cron setup covering
+several roots is one cron line per root instead of one line covering a list.
+
+**Onboarding (SKILL.md) step 6** (git-repo check/`git init`, shipped same day) now runs before
+config is written, and **step 9** writes to `<document_root>/.smart-okf/config.yaml` instead
+of the skill root.
+
 ---
 
 ## Overview

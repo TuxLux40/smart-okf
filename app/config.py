@@ -1,9 +1,13 @@
 """Application configuration: YAML file + environment variable loading.
 
-Load order (lowest to highest precedence): field defaults -> smart-okf.yaml -> env vars
-(`SMART_OKF_` prefix).
+Load order (lowest to highest precedence): field defaults -> .smart-okf/config.yaml -> env vars
+(`SMART_OKF_` prefix). One config lives *inside* the document root it describes (a hidden
+`.smart-okf/` folder), not on the machine running the scripts — so it travels with the tree
+(e.g. over a private git remote to another agent/machine) instead of staying behind. Use
+`load_config(root)` to load a specific root's config; scripts always take a folder argument.
 """
 
+import contextvars
 import ipaddress
 import os
 from pathlib import Path
@@ -11,7 +15,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import yaml
-from pydantic import Field, ValidationInfo, field_validator
+from pydantic import Field, ValidationError, ValidationInfo, field_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -25,9 +29,22 @@ from app.constants import (
     DEFAULT_MAX_TOKENS,
 )
 
-DEFAULT_CONFIG_FILENAME = "smart-okf.yaml"
+CONFIG_DIR_NAME = ".smart-okf"
+CONFIG_FILENAME = "config.yaml"
 DEFAULT_LLM_HOST_ALLOWLIST = ["localhost", "127.0.0.1", "::1", "0.0.0.0"]
 ALWAYS_ALLOWED_HOSTNAMES = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
+
+_config_path_override: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
+    "_config_path_override", default=None
+)
+"""Set by `load_config()` for the duration of one `SmartOkfConfig()` construction so
+`YamlConfigSettingsSource` knows which root's config to read — pydantic-settings gives a
+source no way to receive a per-call argument directly."""
+
+
+def config_path_for_root(root: Path) -> Path:
+    """Where a document root's config lives: `<root>/.smart-okf/config.yaml`."""
+    return root / CONFIG_DIR_NAME / CONFIG_FILENAME
 
 
 def parse_llm_host(value: str) -> str:
@@ -60,16 +77,22 @@ def host_is_allowlisted(hostname: str, extra: list[str]) -> bool:
 
 
 class YamlConfigSettingsSource(PydanticBaseSettingsSource):
-    """Load `smart-okf.yaml` (or `~/.config/smart-okf/smart-okf.yaml`) via pyyaml."""
+    """Load a document root's `.smart-okf/config.yaml` via pyyaml.
+
+    Path comes from `_config_path_override` (set by `load_config(root)`), falling back to
+    the `SMART_OKF_CONFIG` env var for callers that want an explicit override (tests, or a
+    config file kept somewhere other than the root it describes).
+    """
 
     def get_field_value(self, field: Any, field_name: str) -> tuple[Any, str, bool]:
         return None, field_name, False
 
     def __call__(self) -> dict[str, Any]:
-        path = Path(os.getenv("SMART_OKF_CONFIG", DEFAULT_CONFIG_FILENAME))
-        if not path.exists():
-            path = Path.home() / ".config/smart-okf" / DEFAULT_CONFIG_FILENAME
-        if path.exists():
+        path = _config_path_override.get()
+        if path is None:
+            env_override = os.getenv("SMART_OKF_CONFIG")
+            path = Path(env_override) if env_override else None
+        if path is not None and path.exists():
             return yaml.safe_load(path.read_text()) or {}
         return {}
 
@@ -85,8 +108,6 @@ class SmartOkfConfig(BaseSettings):
     """
 
     model_config = SettingsConfigDict(env_prefix="SMART_OKF_", env_nested_delimiter="__")
-
-    document_roots: list[Path] = Field(..., min_length=1)
 
     llm_model: str = DEFAULT_LLM_MODEL
     llm_temperature: float = DEFAULT_LLM_TEMPERATURE
@@ -168,15 +189,6 @@ class SmartOkfConfig(BaseSettings):
             raise ValueError(f"ordering_principle must be 'provenance' or 'pertinence', got {v!r}")
         return v
 
-    @field_validator("document_roots", mode="before")
-    @classmethod
-    def validate_document_roots(cls, v: list[Path | str]) -> list[Path]:
-        """Require at least one root; normalize to resolved absolute paths."""
-        roots = [Path(p).expanduser().resolve() for p in (v or [])]
-        if len(roots) < 1:
-            raise ValueError("document_roots must contain at least one path")
-        return roots
-
     @field_validator("llm_host", "dream_host", "verify_host")
     @classmethod
     def validate_llm_host(cls, v: str | None, info: ValidationInfo) -> str | None:
@@ -200,3 +212,24 @@ class SmartOkfConfig(BaseSettings):
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
         return (init_settings, env_settings, YamlConfigSettingsSource(settings_cls))
+
+
+def load_config(root: Path) -> SmartOkfConfig | None:
+    """Load the config for one document root: `<root>/.smart-okf/config.yaml`, env vars
+    (`SMART_OKF_*`) still override. `SMART_OKF_CONFIG` can point at a file somewhere else
+    entirely (tests, or a config kept outside the root it describes) and wins over the
+    root-relative default. None if the resolved file doesn't exist or fails validation —
+    every field has a default, so callers can't tell "no config" from "all defaults" any
+    other way.
+    """
+    env_override = os.getenv("SMART_OKF_CONFIG")
+    config_path = Path(env_override) if env_override else config_path_for_root(root)
+    if not config_path.is_file():
+        return None
+    token = _config_path_override.set(config_path)
+    try:
+        return SmartOkfConfig()
+    except ValidationError:
+        return None
+    finally:
+        _config_path_override.reset(token)

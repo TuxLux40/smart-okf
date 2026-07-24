@@ -1,6 +1,13 @@
 .venv/
 __pycache__/
 /smart-okf.yaml
+# Defensive: if ingest is ever run against a folder inside this repo, keep its
+# generated knowledge layer and per-root config out of version control.
+.smart-okf/
+.okf-transcripts/
+.okf-facts/
+.okf-llm-log.jsonl
+.okf-dashboard.html
 *.py[cod]
 .pytest_cache/
 .mypy_cache/

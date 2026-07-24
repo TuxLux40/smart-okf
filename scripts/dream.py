@@ -7,8 +7,7 @@ Incremental: zero LLM calls when no aggregate changed since the last dream.
 
 Usage:
     uv run python scripts/dream.py /path/to/documents
-    uv run python scripts/dream.py               # reads document_roots from smart-okf.yaml
-    uv run python scripts/dream.py --force       # re-dream even if nothing changed
+    uv run python scripts/dream.py /path/to/documents --force       # re-dream even if nothing changed
 """
 
 import argparse
@@ -16,32 +15,17 @@ import os
 import sys
 from pathlib import Path
 
-from pydantic import ValidationError
-
-from app.config import SmartOkfConfig
+from app.config import load_config
 from app.constants import LLM_LOG_FILENAME
 from app.services.dream import dream
 from app.services.gating import GatingRules
 from app.services.llm_client import LLMClient
 
 
-def _load_config() -> SmartOkfConfig | None:
-    """Load smart-okf.yaml if present and valid; None otherwise."""
-    try:
-        return SmartOkfConfig()  # type: ignore[call-arg]
-    except ValidationError:
-        return None
-
-
 def main() -> None:
     """CLI entry point for the dream pass."""
     parser = argparse.ArgumentParser(description="Synthesize matters/conflicts/patterns/actions across aggregates.")
-    parser.add_argument(
-        "folder",
-        nargs="?",
-        default=None,
-        help="Document root to dream over. Omit to use every document_roots entry from smart-okf.yaml.",
-    )
+    parser.add_argument("folder", help="Document root to dream over.")
     parser.add_argument(
         "--host",
         default=None,
@@ -58,19 +42,9 @@ def main() -> None:
     parser.add_argument("--quiet", action="store_true", help="Suppress progress output")
     args = parser.parse_args()
 
-    config = _load_config()
-
-    folders: list[str]
-    if args.folder:
-        folders = [args.folder]
-    elif config is not None:
-        folders = [str(root) for root in config.document_roots]
-    else:
-        parser.error(
-            "no folder given and no valid smart-okf.yaml found; "
-            "pass a folder path or complete agent onboarding (see SKILL.md#onboarding-first-run)"
-        )
-        return
+    root = Path(args.folder).expanduser().resolve()
+    config = load_config(root)
+    folders = [str(root)]
 
     # Dreamer resolution: CLI flag > dream_* (config/env) > extractor settings (config, then
     # LLMClient's own SMART_OKF_LLM_* env fallback via model/host=None).

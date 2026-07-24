@@ -22,10 +22,14 @@ Three operations: **onboarding** (first run only), **ingest** (build/refresh the
 
 ## Onboarding (first run)
 
-If no `smart-okf.yaml` exists in the skill root (`ls smart-okf.yaml`) and the user hasn't
-already told you where their documents live and which LLM to use, run this interview before
-doing anything else. This is a conversation you conduct, not a script to invoke — walk the user
-through it, don't dump all the questions at once.
+Config lives *inside* each document root (`<root>/.smart-okf/config.yaml`), not in the skill
+repo — one config per root, so it travels with that tree (e.g. over a private git remote)
+instead of staying behind on this machine. If the user's document root has no
+`.smart-okf/config.yaml` yet, run this interview before doing anything else. Each root is
+onboarded independently — running this again for a second, unrelated document root (a
+different share, a different archive) is expected and does not touch the first root's config.
+This is a conversation you conduct, not a script to invoke — walk the user through it, don't
+dump all the questions at once.
 
 **Two roles (say this once early — it answers "why a local model if Claude is driving?"):**
 
@@ -82,7 +86,7 @@ do not re-read every original PDF for facts that were already distilled.
    If the user has standalone images (photos, meter readings, scans without a PDF wrapper),
    also ask whether a listed model is vision-capable (`vl`/`vision` in the name) for
    handwriting + brief scene description (never identifies people). Optional. Written to
-   `vision_model` in `smart-okf.yaml` if yes. Vision + structured extraction = two LLM calls
+   `vision_model` in `.smart-okf/config.yaml` if yes. Vision + structured extraction = two LLM calls
    per image.
 
 4. **Ask which model should dream** (`dream_model` / `dream_host`). The dream pass
@@ -103,11 +107,14 @@ do not re-read every original PDF for facts that were already distilled.
 
    Dreaming runs rarely (after ingest batches), so a slow-but-smart model costs little.
 
-5. **Ask where their documents live** (`document_roots` — can be more than one path) and
-   confirm the folder exists and looks like personal documents, not a code repo or media
-   library.
+5. **Ask where this document root lives** and confirm the folder exists and looks like
+   personal documents, not a code repo or media library. One config = one root = one
+   independent knowledge base. A second, unrelated tree (a different share, a different
+   archive) is a separate onboarding run with its own `.smart-okf/config.yaml` — there is
+   no cross-root linking in smart-okf itself; that happens at query time if the orchestrator
+   references multiple KBs (e.g. several OpenWebUI knowledge collections in one chat).
 
-6. **Set up git version tracking** — check each document root:
+6. **Set up git version tracking** — check the document root:
 
    ```bash
    git -C /path/to/documents rev-parse --is-inside-work-tree
@@ -138,12 +145,14 @@ do not re-read every original PDF for facts that were already distilled.
    their own exceptions; `priority_patterns` forces something back into deep analysis.
    Password-protected files are always skipped and logged automatically.
 
-9. **Write `smart-okf.yaml`** in the skill root from what you learned (see
-   [smart-okf.example.yaml](smart-okf.example.yaml): `document_roots`, `llm_host`, `llm_model`,
-   optional `vision_model` / `dream_model` / `dream_host` / `verify_model` / `verify_host` /
+9. **Write `<document_root>/.smart-okf/config.yaml`** from what you learned (see
+   [smart-okf.example.yaml](smart-okf.example.yaml): `llm_host`, `llm_model`, optional
+   `vision_model` / `dream_model` / `dream_host` / `verify_model` / `verify_host` /
    `use_marker` / `ordering_principle` / `exclude_patterns` / `low_priority_patterns` /
-   `priority_patterns` / `derive_per_file` / `generate_readme`). Plain YAML — write it
-   directly; there is no `scripts/onboard.py`.
+   `priority_patterns` / `derive_per_file` / `generate_readme`). Plain YAML — create the
+   `.smart-okf/` folder and write the file directly; there is no `scripts/onboard.py`. The
+   config lives in the document root itself, not the skill repo — it's part of that KB, not
+   part of this install.
 
 10. Offer a first ingest on one subfolder as a smoke test before the whole tree — see
    **Ingest cautions** below.
@@ -275,7 +284,7 @@ Requires an OpenAI-compatible LLM server (LM Studio, llama.cpp `llama-server`, O
 Check reachability before starting: `curl -s $SMART_OKF_LLM_HOST/v1/models`.
 
 ```bash
-cd /home/oliver/Projects/smart-okf   # skill root — scripts import the app/ package
+cd /path/to/smart-okf   # skill root — scripts import the app/ package
 SMART_OKF_LLM_HOST=http://127.0.0.1:1234 \
 SMART_OKF_LLM_MODEL=gemma-4-e4b-it-qat \
 uv run python scripts/ingest_folder.py /path/to/documents
@@ -317,7 +326,7 @@ uv run python scripts/ingest_folder.py /path/to/documents
 - Cron/systemd-timer use the same command — no daemon, no watcher. Example crontab line:
 
   ```
-  0 3 * * 0  cd /home/oliver/Projects/smart-okf && SMART_OKF_LLM_HOST=http://127.0.0.1:1234 SMART_OKF_LLM_MODEL=gemma-4-e4b-it-qat uv run python scripts/ingest_folder.py /home/oliver/nas/home/documents
+  0 3 * * 0  cd /path/to/smart-okf && SMART_OKF_LLM_HOST=http://127.0.0.1:1234 SMART_OKF_LLM_MODEL=gemma-4-e4b-it-qat uv run python scripts/ingest_folder.py /path/to/documents
   ```
 
 ### Ingest cautions
@@ -374,7 +383,7 @@ uv run python scripts/dream.py /path/to/documents
   facts in the cited aggregate (and its transcripts) before answering from it.
 
 ```cron
-0 3 * * 0  cd /path/to/smart-okf && uv run python scripts/ingest_folder.py && uv run python scripts/dream.py
+0 3 * * 0  cd /path/to/smart-okf && uv run python scripts/ingest_folder.py /path/to/documents && uv run python scripts/dream.py /path/to/documents
 ```
 
 ## OpenWebUI integration
@@ -401,7 +410,8 @@ real tree (originals + aggregates) untouched.
 
 ## Configuration
 
-Environment variables (or `smart-okf.yaml`, see [smart-okf.example.yaml](smart-okf.example.yaml)):
+Environment variables (or `<document_root>/.smart-okf/config.yaml`, see
+[smart-okf.example.yaml](smart-okf.example.yaml)):
 
 | Variable                   | Default                  | Purpose |
 | -------------------------- | ------------------------ | ------- |
@@ -409,7 +419,7 @@ Environment variables (or `smart-okf.yaml`, see [smart-okf.example.yaml](smart-o
 | `SMART_OKF_LLM_MODEL`    | `qwen2.5:3b`             | Extractor model name as the server reports it |
 | `SMART_OKF_LLM_API_KEY`  | `not-needed`             | Only for servers that require auth |
 | `SMART_OKF_VISION_MODEL` | unset                    | Optional vision model on the same host for images |
-| `SMART_OKF_CONFIG`       | `smart-okf.yaml`         | Path to YAML config |
+| `SMART_OKF_CONFIG`       | `<root>/.smart-okf/config.yaml` | Override: read config from this exact path instead |
 
 YAML-only settings (no env var): `ordering_principle` (provenance/pertinence, see
 [docs/ARCHIVAL_PRINCIPLES.md](docs/ARCHIVAL_PRINCIPLES.md)); `exclude_patterns` /

@@ -60,6 +60,7 @@ documents/
 │   │   └── hospitals.md      ← 📝 summary of everything in this folder
 │   └── neurology/
 │       └── neurology.md      ← 📝 summary of everything in this folder
+├── .smart-okf/                ← hidden: config.yaml (llm host/model, gating patterns, ...)
 └── .okf-transcripts/         ← hidden: full raw text as fallback in case extraction missed something
 ```
 
@@ -194,12 +195,14 @@ flowchart LR
 
 ## 🖥️ The static HTML dashboard — read-only by construction
 
-`uv run python scripts/dashboard.py /path/to/documents` writes a single self-contained `.okf-dashboard.html`: an MD browser, a `git log --graph` view, and a config summary, with inline CSS/JS and no CDN dependencies.
+`uv run python scripts/dashboard.py /path/to/documents` writes a single self-contained `.okf-dashboard.html`: an MD browser, a `git log --graph` view, a config summary, and — if this install has `evals/evals.json` — an Evals section, with inline CSS/JS and no CDN dependencies.
 
-Read-only isn't a permission flag here — it's a property of what got built:
+The Evals section is about *this skill's* own quality, not the document tree you pointed the dashboard at: it reads `evals/evals.json` (and `evals/benchmark.json` if a benchmark has run) from smart-okf's own repo, using the same schema as [skill-creator](https://github.com/anthropics/skills)'s eval mechanism — prompts + expectations, pass-rate badges per eval, with-skill vs. without-skill deltas. Omitted entirely (no heading, nothing) when no `evals/` directory exists, so a fresh clone's dashboard doesn't show a hollow section.
+
+Read-only is guaranteed through architecture:
 
 - **No server.** `render_dashboard()` returns one HTML string; the script writes it to disk and exits. Nothing ever listens on a socket, so there's no endpoint to send a write to.
-- **No write code path.** The only JavaScript on the page is a client-side search filter over what's already rendered — no `fetch`, no `XMLHttpRequest`, no form that POSTs anywhere. Config is *displayed*, never *edited* from the page: there's no code that would take a change and write it back to `smart-okf.yaml` or the documents.
+- **No write code path.** The only JavaScript on the page is a client-side search filter over what's already rendered — no `fetch`, no `XMLHttpRequest`, no form that POSTs anywhere. Config is *displayed*, never *edited* from the page: there's no code that would take a change and write it back to `.smart-okf/config.yaml` or the documents.
 - **Regenerate, don't mutate.** Want it current? Re-run the script — it re-reads the tree and produces a new static file. There's no "save" button because there's nothing on the server side to save to.
 
 That last point is also the boundary the project holds on purpose: a write path here is the line where this stops being a static dashboard and becomes the webapp smart-okf deliberately isn't (see [`app/services/ports.py`](app/services/ports.py) for the Protocols reserved for that, unimplemented).
@@ -212,7 +215,7 @@ That last point is also the boundary the project holds on purpose: a write path 
 | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
 | One plain-Markdown summary per folder                                                                                | ✅                                               |
 | Reads PDF, scans (OCR), Word, email, CSV, Excel, images                                                              | ✅                                               |
-| Layout-aware PDF reading via[marker](https://github.com/datalab-to/marker) (optional, `--no-marker` to skip)        | ✅ Default on                                    |
+| Layout-aware PDF reading via [marker](https://github.com/datalab-to/marker) (optional, `--no-marker` to skip)      | ✅ Default on                                    |
 | Full raw transcripts kept for exact quotes/IDs                                                                       | ✅                                               |
 | Only re-reads files that actually changed                                                                            | ✅ Incremental                                   |
 | **Mandatory fact-check** — every extraction verified against its source, doubtful ones flagged                | ✅ Always on                                     |
@@ -293,13 +296,13 @@ flowchart TB
         CLI["scripts: ingest · dream · validate · dashboard"]
         Services["app/services<br/>ingest · gating · verify · dream · navigation"]
         Prompts["prompts/*.md"]
-        Config["smart-okf.yaml / env"]
     end
     subgraph host["Ingest host"]
         Tools["marker · tesseract · gs · rg"]
         Extractor["Extractor LLM (local or hosted)"]
     end
     subgraph tree["Your document root"]
+        Config[".smart-okf/config.yaml"]
         Sources["Sources (PDF/docx/…)"]
         Agg["Summaries + roll-up indexes"]
         Synth["synthesis.md + matters/"]
@@ -320,8 +323,8 @@ flowchart TB
     classDef b fill:#d97757,stroke:#7d3c1e,color:#fff
     classDef c fill:#1a7f37,stroke:#0f5323,color:#fff
     class Agent,Cron,Human a
-    class CLI,Services,Prompts,Config b
-    class Sources,Agg,Synth,Tx,Nav,Git c
+    class CLI,Services,Prompts b
+    class Sources,Agg,Synth,Tx,Nav,Git,Config c
 ```
 
 ### What this deliberately is _not_
@@ -360,7 +363,7 @@ Full format rules: [`docs/OKF_SPEC.md`](docs/OKF_SPEC.md). [OKF](https://github.
 
 ## ⚙️ Configuration
 
-Settings load in order: built-in defaults → `smart-okf.yaml` → `SMART_OKF_*` environment variables. Full template: [`smart-okf.example.yaml`](smart-okf.example.yaml).
+Settings load in order: built-in defaults → `<document_root>/.smart-okf/config.yaml` → `SMART_OKF_*` environment variables. One config per document root — it lives inside the tree it describes (hidden folder), not on the machine running the scripts, so it travels with the tree (e.g. over a private git remote). Full template: [`smart-okf.example.yaml`](smart-okf.example.yaml).
 
 | Setting                                           | Default                               | What it does                                                                                                                                 |
 | ------------------------------------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |

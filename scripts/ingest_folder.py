@@ -7,17 +7,17 @@ whose SHA-256 is unchanged since the last run are not re-sent to the LLM.
 Usage:
     uv run python scripts/ingest_folder.py /path/to/documents
     uv run python scripts/ingest_folder.py /path/to/documents --host http://127.0.0.1:1234 --model gemma-4-e4b-it-qat
-    uv run python scripts/ingest_folder.py   # no path: reads document_roots from smart-okf.yaml
-                                              # (see SKILL.md's Onboarding section to create one)
+
+Config is read from `<folder>/.smart-okf/config.yaml` if present (see SKILL.md's Onboarding
+section to create one) — one config per document root, so it travels with the tree (e.g. over
+a private git remote) instead of staying behind on the machine that ran ingest.
 """
 
 import argparse
 import sys
 from pathlib import Path
 
-from pydantic import ValidationError
-
-from app.config import SmartOkfConfig
+from app.config import load_config
 from app.constants import LLM_LOG_FILENAME
 from app.services.extraction_options import ExtractionOptions
 from app.services.gating import GatingRules
@@ -26,28 +26,13 @@ from app.services.llm_client import LLMClient
 from app.services.text_extraction import marker_available
 
 
-def _load_config() -> SmartOkfConfig | None:
-    """Load smart-okf.yaml if present and valid; None otherwise (no error to the user).
-
-    No kwargs passed to the constructor: an explicit `document_roots=...` here would
-    count as the (highest-priority) init source and silently override whatever the YAML
-    file specifies.
-    """
-    try:
-        return SmartOkfConfig()  # type: ignore[call-arg]
-    except ValidationError:
-        return None
-
-
 def main() -> None:
     """CLI entry point for folder ingest."""
     parser = argparse.ArgumentParser(description="Ingest a document folder into per-folder OKF aggregates.")
     parser.add_argument(
         "folder",
-        nargs="?",
-        default=None,
         help="Document folder to ingest (recurses; one aggregate per subfolder). "
-        "Omit to ingest every document_roots entry from smart-okf.yaml.",
+        "Config is read from <folder>/.smart-okf/config.yaml if present.",
     )
     parser.add_argument("--host", default=None, help="OpenAI-compatible server URL (default: config/env)")
     parser.add_argument("--model", default=None, help="Model name (default: config/env)")
@@ -80,19 +65,9 @@ def main() -> None:
     parser.add_argument("--quiet", action="store_true", help="Suppress per-file progress output")
     args = parser.parse_args()
 
-    config = _load_config()
-
-    folders: list[str]
-    if args.folder:
-        folders = [args.folder]
-    elif config is not None:
-        folders = [str(root) for root in config.document_roots]
-    else:
-        parser.error(
-            "no folder given and no valid smart-okf.yaml found; "
-            "pass a folder path or complete agent onboarding (see SKILL.md#onboarding-first-run)"
-        )
-        return
+    root = Path(args.folder).expanduser().resolve()
+    config = load_config(root)
+    folders = [str(root)]
 
     host: str | None = args.host or (config.llm_host if config is not None else None)
     model: str | None = args.model or (config.llm_model if config is not None else None)

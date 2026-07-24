@@ -1,5 +1,6 @@
 """Tests for the static, read-only HTML dashboard generator."""
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -8,9 +9,13 @@ import pytest
 from app.models.okf import OKFDocument, OKFFrontmatter
 from app.services.dashboard import (
     DashboardData,
+    EvalCase,
+    EvalRun,
+    EvalSummary,
     build_config_summary,
     collect_cron_lines,
     collect_dashboard_data,
+    collect_eval_data,
     collect_markdown_entries,
     git_log_graph,
     render_dashboard,
@@ -84,7 +89,7 @@ def test_git_log_graph_returns_commits_for_real_repo(tmp_path: Path) -> None:
 def test_build_config_summary_none_reports_missing_config() -> None:
     summary = build_config_summary(None)
 
-    assert "no valid smart-okf.yaml" in summary["status"]
+    assert "no valid .smart-okf/config.yaml" in summary["status"]
 
 
 def test_collect_cron_lines_does_not_raise(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -127,3 +132,148 @@ def test_collect_dashboard_data_end_to_end(tmp_path: Path) -> None:
     assert len(data.entries) == 1
     assert data.config_summary["status"]
     assert isinstance(data.cron_lines, list)
+
+
+def test_collect_eval_data_returns_none_without_evals_json(tmp_path: Path) -> None:
+    assert collect_eval_data(tmp_path) is None
+
+
+def test_collect_eval_data_reads_cases_without_benchmark(tmp_path: Path) -> None:
+    evals_dir = tmp_path / "evals"
+    evals_dir.mkdir()
+    (evals_dir / "evals.json").write_text(
+        json.dumps(
+            {
+                "skill_name": "smart-okf",
+                "evals": [
+                    {
+                        "id": 1,
+                        "prompt": "Find the policy number in the insurance folder",
+                        "expected_output": "Cites the correct aggregate and policy number",
+                        "expectations": ["Output includes the policy number", "Cites a source filename"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = collect_eval_data(tmp_path)
+
+    assert summary is not None
+    assert summary.cases == [
+        EvalCase(
+            id="1",
+            prompt="Find the policy number in the insurance folder",
+            expected_output="Cites the correct aggregate and policy number",
+            expectation_count=2,
+        )
+    ]
+    assert summary.runs == []
+
+
+def test_collect_eval_data_reads_benchmark_results(tmp_path: Path) -> None:
+    evals_dir = tmp_path / "evals"
+    evals_dir.mkdir()
+    (evals_dir / "evals.json").write_text(json.dumps({"skill_name": "smart-okf", "evals": []}), encoding="utf-8")
+    (evals_dir / "benchmark.json").write_text(
+        json.dumps(
+            {
+                "metadata": {"timestamp": "2026-07-24T10:00:00Z"},
+                "runs": [
+                    {
+                        "eval_id": 1,
+                        "eval_name": "Retrieval ladder",
+                        "configuration": "with_skill",
+                        "result": {"pass_rate": 0.9, "passed": 9, "total": 10},
+                    },
+                    {
+                        "eval_id": 1,
+                        "eval_name": "Retrieval ladder",
+                        "configuration": "without_skill",
+                        "result": {"pass_rate": 0.3, "passed": 3, "total": 10},
+                    },
+                ],
+                "run_summary": {
+                    "with_skill": {"pass_rate": {"mean": 0.9}},
+                    "without_skill": {"pass_rate": {"mean": 0.3}},
+                    "delta": {"pass_rate": "+0.60"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = collect_eval_data(tmp_path)
+
+    assert summary is not None
+    assert summary.benchmark_timestamp == "2026-07-24T10:00:00Z"
+    assert summary.run_summary["with_skill"]["pass_rate"]["mean"] == 0.9
+    assert summary.runs == [
+        EvalRun(
+            eval_id="1", eval_name="Retrieval ladder", configuration="with_skill", pass_rate=0.9, passed=9, total=10
+        ),
+        EvalRun(
+            eval_id="1", eval_name="Retrieval ladder", configuration="without_skill", pass_rate=0.3, passed=3, total=10
+        ),
+    ]
+
+
+def test_render_dashboard_omits_eval_section_when_no_evals(tmp_path: Path) -> None:
+    data = DashboardData(root=tmp_path, evals=None)
+
+    html_output = render_dashboard(data)
+
+    assert 'id="evals"' not in html_output
+
+
+def test_render_dashboard_shows_eval_cases_without_benchmark(tmp_path: Path) -> None:
+    data = DashboardData(
+        root=tmp_path,
+        evals=EvalSummary(
+            cases=[EvalCase(id="1", prompt="Do the thing", expected_output="It happens", expectation_count=3)]
+        ),
+    )
+
+    html_output = render_dashboard(data)
+
+    assert 'id="evals"' in html_output
+    assert "Not yet benchmarked" in html_output
+    assert "Do the thing" in html_output
+
+
+def test_render_dashboard_shows_benchmark_pass_rates(tmp_path: Path) -> None:
+    data = DashboardData(
+        root=tmp_path,
+        evals=EvalSummary(
+            cases=[EvalCase(id="1", prompt="p", expected_output="e", expectation_count=1)],
+            benchmark_timestamp="2026-07-24T10:00:00Z",
+            run_summary={"with_skill": {"pass_rate": {"mean": 0.9}}, "without_skill": {"pass_rate": {"mean": 0.3}}},
+            runs=[
+                EvalRun(
+                    eval_id="1",
+                    eval_name="Retrieval ladder",
+                    configuration="with_skill",
+                    pass_rate=0.9,
+                    passed=9,
+                    total=10,
+                ),
+                EvalRun(
+                    eval_id="1",
+                    eval_name="Retrieval ladder",
+                    configuration="without_skill",
+                    pass_rate=0.3,
+                    passed=3,
+                    total=10,
+                ),
+            ],
+        ),
+    )
+
+    html_output = render_dashboard(data)
+
+    assert "Retrieval ladder" in html_output
+    assert "90%" in html_output
+    assert "30%" in html_output
+    assert "eval-pass" in html_output
+    assert "eval-fail" in html_output

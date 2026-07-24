@@ -1,9 +1,10 @@
-# Copy to smart-okf.yaml (skill root) or ~/.config/smart-okf/smart-okf.yaml and edit.
+# Copy to <document_root>/.smart-okf/config.yaml and edit — one config per document root,
+# living inside that root (hidden folder), so it travels with the tree instead of staying
+# behind on whichever machine ran ingest. Each root is a fully independent knowledge base;
+# nothing here links multiple roots together (that happens at query time, e.g. referencing
+# several KBs in one OpenWebUI chat).
 # Agent onboarding (SKILL.md) writes this file after checking deps and detecting an LLM.
 # Env vars override this file: SMART_OKF_<FIELD_NAME> (e.g. SMART_OKF_LLM_MODEL).
-
-document_roots:
-  - /path/to/your/documents
 
 # Extractor: local OpenAI-compatible server the *script* calls (not the orchestrating agent).
 llm_host: http://127.0.0.1:1234

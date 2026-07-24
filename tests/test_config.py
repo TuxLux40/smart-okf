@@ -1,25 +1,16 @@
 """Tests for SmartOkfConfig loading and llm_host allowlist validation."""
 
+from pathlib import Path
+
 import pytest
+import yaml
 from pydantic import ValidationError
 
-from app.config import SmartOkfConfig, host_is_allowlisted, parse_llm_host
+from app.config import SmartOkfConfig, config_path_for_root, host_is_allowlisted, load_config, parse_llm_host
 
 
 def _config(**overrides: object) -> SmartOkfConfig:
-    defaults: dict[str, object] = {"document_roots": ["/tmp/docs"]}
-    defaults.update(overrides)
-    return SmartOkfConfig(**defaults)  # type: ignore[arg-type]
-
-
-def test_document_roots_requires_at_least_one_path() -> None:
-    with pytest.raises(ValidationError):
-        _config(document_roots=[])
-
-
-def test_document_roots_normalized_to_resolved_paths() -> None:
-    config = _config(document_roots=["~/docs"])
-    assert config.document_roots[0].is_absolute()
+    return SmartOkfConfig(**overrides)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(
@@ -103,3 +94,46 @@ def test_gating_and_derive_defaults() -> None:
     assert config.priority_patterns == []
     assert config.derive_per_file is False
     assert config.generate_readme is True
+
+
+def test_config_path_for_root_is_hidden_folder_inside_root(tmp_path: Path) -> None:
+    assert config_path_for_root(tmp_path) == tmp_path / ".smart-okf" / "config.yaml"
+
+
+def test_load_config_returns_none_without_a_config_file(tmp_path: Path) -> None:
+    assert load_config(tmp_path) is None
+
+
+def test_load_config_reads_yaml_from_the_document_root(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".smart-okf"
+    config_dir.mkdir()
+    (config_dir / "config.yaml").write_text(yaml.dump({"llm_model": "qwen2.5:7b", "ordering_principle": "pertinence"}))
+
+    config = load_config(tmp_path)
+
+    assert config is not None
+    assert config.llm_model == "qwen2.5:7b"
+    assert config.ordering_principle == "pertinence"
+
+
+def test_load_config_env_var_overrides_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_dir = tmp_path / ".smart-okf"
+    config_dir.mkdir()
+    (config_dir / "config.yaml").write_text(yaml.dump({"llm_model": "qwen2.5:7b"}))
+    monkeypatch.setenv("SMART_OKF_LLM_MODEL", "gemma-4b")
+
+    config = load_config(tmp_path)
+
+    assert config is not None
+    assert config.llm_model == "gemma-4b"
+
+
+def test_load_config_does_not_leak_across_different_roots(tmp_path: Path) -> None:
+    root_a = tmp_path / "a"
+    root_b = tmp_path / "b"
+    (root_a / ".smart-okf").mkdir(parents=True)
+    (root_a / ".smart-okf" / "config.yaml").write_text(yaml.dump({"llm_model": "model-a"}))
+
+    assert load_config(root_a) is not None
+    assert load_config(root_a).llm_model == "model-a"  # type: ignore[union-attr]
+    assert load_config(root_b) is None

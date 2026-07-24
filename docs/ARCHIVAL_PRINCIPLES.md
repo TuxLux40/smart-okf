@@ -70,4 +70,4 @@ retaining and at what depth. smart-okf's gating (`app/services/gating.py`) is th
 Because more than one principle can legitimately govern, the choice is not assumed — the
 onboarding interview asks for the governing `ordering_principle` (respect folders as-is, or
 lean into cross-folder matters) and for any exclude/low-priority/priority patterns, and
-records them in `smart-okf.yaml`.
+records them in `<document_root>/.smart-okf/config.yaml`.
