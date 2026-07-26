@@ -298,6 +298,7 @@ def ingest_folder(
     rules: GatingRules | None = None,
     derive_per_file: bool = False,
     generate_readme: bool = True,
+    force: bool = False,
 ) -> IngestFolderResult:
     """Ingest supported documents from a folder, writing one aggregate `.md` per subfolder.
 
@@ -310,6 +311,7 @@ def ingest_folder(
     for documents carrying no durable facts (manuals, terms). `derive_per_file` additionally
     writes one `.okf-facts/<file>.md` per document (the facts are always in the aggregate
     regardless). `generate_readme` refreshes the human navigation `README.md` at the root.
+    `force` re-extracts every file regardless of `source_hashes` — see `_ingest_directory`.
     """
     root = Path(folder).expanduser().resolve()
     result = IngestFolderResult(root=root)
@@ -337,6 +339,7 @@ def ingest_folder(
             verify_client=verify_client,
             rules=gating_rules,
             derive_per_file=derive_per_file,
+            force=force,
         )
 
     write_rollups(root, result, verbose=verbose)
@@ -404,8 +407,15 @@ def _ingest_directory(
     verify_client: LLMClient | None = None,
     rules: GatingRules | None = None,
     derive_per_file: bool = False,
+    force: bool = False,
 ) -> None:
-    """Ingest the files directly inside one directory (non-recursive) into its aggregate."""
+    """Ingest the files directly inside one directory (non-recursive) into its aggregate.
+
+    `force` ignores any existing `source_hashes`/sections — every file is re-extracted
+    even if unchanged, e.g. after a prompt change that should apply to already-ingested
+    folders too. Reused-section logic below sees an empty baseline either way, so the
+    normal incremental path and the forced path are the same code, just starting cold.
+    """
     gating_rules = rules or GatingRules()
     supported = sorted(f for f in directory.iterdir() if f.is_file() and is_supported_document(f))
     files: list[Path] = []
@@ -429,8 +439,8 @@ def _ingest_directory(
 
     current_hashes = {f.name: hash_file(f) for f in files}
     existing = load_existing_summary(summary_path)
-    old_hashes = existing.frontmatter.source_hashes if existing else {}
-    old_sections = parse_existing_sections(existing) if existing else {}
+    old_hashes = {} if force else (existing.frontmatter.source_hashes if existing else {})
+    old_sections = {} if force else (parse_existing_sections(existing) if existing else {})
 
     if existing is not None and current_hashes == old_hashes:
         result.unchanged_dirs.append(directory)
@@ -441,10 +451,13 @@ def _ingest_directory(
         return
 
     sections: list[str] = []
-    tags: list[str] = [] if existing is None else list(existing.frontmatter.tags)
+    tags: list[str] = [] if existing is None or force else list(existing.frontmatter.tags)
     # Start from existing identifiers on incremental re-ingest (reused sections have no
-    # per-document frontmatter to re-read); newly extracted docs union in below.
-    identifier_maps: list[dict[str, list[str]]] = [] if existing is None else [dict(existing.frontmatter.identifiers)]
+    # per-document frontmatter to re-read); newly extracted docs union in below. Under
+    # `force`, start cold — the whole point is discarding a possibly-fabricated baseline.
+    identifier_maps: list[dict[str, list[str]]] = (
+        [] if existing is None or force else [dict(existing.frontmatter.identifiers)]
+    )
     extracted_any = False
     ingested_files: list[Path] = []
 

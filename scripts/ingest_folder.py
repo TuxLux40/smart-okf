@@ -66,6 +66,12 @@ def main() -> None:
     )
     parser.add_argument("--quiet", action="store_true", help="Suppress per-file progress output")
     parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-extract every file regardless of source_hashes — use after a prompt/schema "
+        "change that should apply to already-ingested folders too, not just new/changed files.",
+    )
+    parser.add_argument(
         "--allow-model-mismatch",
         action="store_true",
         help="Proceed even if the server at --host isn't currently serving the configured "
@@ -166,6 +172,7 @@ def main() -> None:
             rules=rules,
             derive_per_file=derive_per_file,
             generate_readme=generate_readme,
+            force=args.force,
         )
         combined.written_paths.extend(result.written_paths)
         combined.unchanged_dirs.extend(result.unchanged_dirs)

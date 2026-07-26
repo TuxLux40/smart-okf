@@ -80,6 +80,21 @@ def test_reingest_of_unchanged_folder_makes_no_llm_calls(tmp_path: Path) -> None
     assert result.unchanged_dirs == [tmp_path]
 
 
+def test_force_reextracts_an_otherwise_unchanged_folder(tmp_path: Path) -> None:
+    """`force=True` must bypass source_hashes entirely — the whole point is applying a
+    prompt/schema change (e.g. the identifiers feature) to folders that would otherwise
+    be skipped as unchanged."""
+    (tmp_path / "notes.txt").write_text("Some notes", encoding="utf-8")
+    ingest_folder(str(tmp_path), client=_StubLLMClient())  # type: ignore[arg-type]
+
+    client = _StubLLMClient()
+    result = ingest_folder(str(tmp_path), client=client, force=True)  # type: ignore[arg-type]
+
+    assert client.calls == 1
+    assert result.unchanged_dirs == []
+    assert result.written_paths == [tmp_path / f"{tmp_path.name}.md"]
+
+
 def test_reingest_only_reextracts_changed_files(tmp_path: Path) -> None:
     (tmp_path / "stable.txt").write_text("Stays the same", encoding="utf-8")
     (tmp_path / "edited.txt").write_text("Version one", encoding="utf-8")
