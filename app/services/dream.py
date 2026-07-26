@@ -121,6 +121,11 @@ def build_digest(aggregate_path: Path, root: Path) -> str:
         lines.append(f"Tags: {', '.join(document.frontmatter.tags)}")
     if document.frontmatter.sources:
         lines.append(f"Sources: {', '.join(document.frontmatter.sources)}")
+    if document.frontmatter.identifiers:
+        # Compact, deterministic: "key: v1, v2; other: v3" so matter_grouping can see
+        # alphanumerics without reading section bodies (which stay out of the digest).
+        id_parts = [f"{key}: {', '.join(values)}" for key, values in sorted(document.frontmatter.identifiers.items())]
+        lines.append(f"Identifiers: {'; '.join(id_parts)}")
 
     body = document.body.strip()
     first_section = body.find("## ")

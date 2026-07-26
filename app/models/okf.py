@@ -43,6 +43,13 @@ class OKFFrontmatter(BaseModel):
         default_factory=dict,
         description="SHA-256 per source filename; lets re-ingest skip unchanged files entirely",
     )
+    identifiers: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description=(
+            "Reference numbers/codes grouped by kind (e.g. versicherungsnummer, iban). "
+            "On a FolderSummary this is the sorted, deduplicated union across all sources."
+        ),
+    )
     resource: str | None = None
     okf_version: str | None = None
     """Per OKF spec §11: only meaningful in a bundle-root index.md, not on every concept."""

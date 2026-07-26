@@ -11,5 +11,5 @@ MarkdownContent: TypeAlias = str
 OkfTypeName: TypeAlias = str
 """OKF frontmatter `type` value (Fact, Event, Person, …)."""
 
-FrontmatterPatch: TypeAlias = dict[str, str | list[str]]
-"""Fields to merge into OKF frontmatter via `model_copy` (strings or tag lists)."""
+FrontmatterPatch: TypeAlias = dict[str, str | list[str] | dict[str, list[str]]]
+"""Fields to merge into OKF frontmatter via `model_copy` (strings, tag lists, or identifiers maps)."""

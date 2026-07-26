@@ -20,7 +20,7 @@ the synthesis. Two things follow from making it a real file:
 import hashlib
 from pathlib import Path
 
-from app.constants import MATTER_OKF_TYPE, MATTERS_DIR_NAME
+from app.constants import MATTER_OKF_TYPE, MATTERS_DIR_NAME, TRANSCRIPTS_DIR_NAME
 from app.models.okf import OKFDocument, OKFFrontmatter
 from app.services.ingest import hash_file, load_existing_summary
 
@@ -90,6 +90,16 @@ def write_matter_file(root: Path, group: list[Path], tokens: list[str], deep_div
         source_hashes=current_hashes,
     )
     document = OKFDocument(frontmatter=frontmatter, body=body)
+
+    # Lazy import: see the matching comment in ingest.py's `_ingest_directory` — avoids a
+    # circular import with validation.py, which itself imports from `app.services.ingest`.
+    from app.services.validation import render_validation_banner, validate_aggregate
+
+    validation = validate_aggregate(document, path, transcripts_root=root / TRANSCRIPTS_DIR_NAME)
+    if not validation.passed:
+        banner = render_validation_banner(validation)
+        document = OKFDocument(frontmatter=frontmatter, body=f"{banner}\n\n{body}")
+
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(document.to_markdown(), encoding="utf-8")
     return path

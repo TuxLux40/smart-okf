@@ -1,11 +1,11 @@
 """Cheap, non-LLM pre-filter for candidate cross-folder matters.
 
 Groups aggregates that share a probable reference number (contract, customer, case,
-meter, or account ID — anything 5+ consecutive digits) before any deep-dive LLM call
-touches them. This keeps the expensive pass (`app/services/dream.py`'s per-matter
-deep dive, which reads full aggregate bodies) bounded to genuinely related aggregates
-instead of scaling with tree size: number of deep-dive calls = number of candidate
-groups, not number of aggregates.
+meter, or account ID — anything 5+ consecutive digits, or alphanumerics like
+`13040393S105`) before any deep-dive LLM call touches them. This keeps the expensive
+pass (`app/services/dream.py`'s per-matter deep dive, which reads full aggregate bodies)
+bounded to genuinely related aggregates instead of scaling with tree size: number of
+deep-dive calls = number of candidate groups, not number of aggregates.
 """
 
 import re
@@ -15,6 +15,12 @@ DEFAULT_MIN_TOKEN_DIGITS = 5
 """Baseline minimum length for a numeric token to count as a shared identifier — the
 `provenance` ordering principle. `pertinence` lowers it (more, looser cross-folder
 groups); a stricter setting raises it. See `app/config.py::ordering_principle`."""
+
+_YEAR_TOKEN = re.compile(r"^(?:19|20)\d{2}$")
+"""Bare calendar years must never alone merge unrelated folders into one matter."""
+
+_ALPHANUM_CANDIDATE = re.compile(r"[A-Za-z0-9]{6,}")
+"""Candidates for mixed alphanumerics; refined by digit/letter counts below."""
 
 
 def min_token_digits_for_principle(ordering_principle: str) -> int:
@@ -27,17 +33,37 @@ def min_token_digits_for_principle(ordering_principle: str) -> int:
     return 4 if ordering_principle == "pertinence" else DEFAULT_MIN_TOKEN_DIGITS
 
 
-def extract_numeric_tokens(text: str, *, min_digits: int = DEFAULT_MIN_TOKEN_DIGITS) -> set[str]:
-    """Return numeric substrings of at least `min_digits` digits — likely contract/customer/
-    meter/case IDs.
+def _is_alphanum_reference(token: str) -> bool:
+    """True for mixed refs like `13040393S105` / `371D079997` (≥2 digits, ≥1 letter, len≥6)."""
+    if len(token) < 6:
+        return False
+    digits = sum(character.isdigit() for character in token)
+    letters = sum(character.isalpha() for character in token)
+    return digits >= 2 and letters >= 1
 
-    The default 5 is deliberately low: German utility/insurance/case references are
-    commonly 6-10 digits, but shorter postal/customer codes exist too. False
-    positives (e.g. a stray year-like number) just mean a slightly bigger deep-dive
-    group — the deep-dive prompt is instructed to say "not the same matter" when the
-    shared number turns out to be coincidental, rather than forcing a connection.
+
+def extract_numeric_tokens(text: str, *, min_digits: int = DEFAULT_MIN_TOKEN_DIGITS) -> set[str]:
+    """Return likely contract/customer/meter/case IDs from free text (or a digest).
+
+    Includes:
+    - pure digit runs of at least `min_digits` (default 5), excluding bare years `19xx`/`20xx`
+      so a shared calendar year never merges two unrelated folders;
+    - alphanumerics of length ≥6 with ≥2 digits and ≥1 letter (`13040393S105`,
+      `1ISK0069105958`, `371D079997`).
+
+    Prefer feeding digests that already carry an `Identifiers:` line (from
+    `build_digest`) so values come from the structured frontmatter map; free-text
+    extraction still applies the same filters for older aggregates without that line.
     """
-    return set(re.findall(rf"\d{{{min_digits},}}", text))
+    tokens: set[str] = set()
+    for match in re.findall(rf"\d{{{min_digits},}}", text):
+        if _YEAR_TOKEN.fullmatch(match):
+            continue
+        tokens.add(match)
+    for candidate in _ALPHANUM_CANDIDATE.findall(text):
+        if _is_alphanum_reference(candidate):
+            tokens.add(candidate)
+    return tokens
 
 
 def group_by_shared_tokens(digests: dict[Path, str], *, min_digits: int = DEFAULT_MIN_TOKEN_DIGITS) -> list[list[Path]]:

@@ -6,7 +6,10 @@ DEFAULT_LLM_MODEL = "qwen2.5:3b"
 DEFAULT_LLM_HOST = "http://localhost:11434"
 """Any OpenAI-compatible chat completions server: Ollama, llama.cpp server, vLLM, OpenAI, etc."""
 DEFAULT_LLM_TEMPERATURE = 0.3
-DEFAULT_MAX_TOKENS = 2048
+DEFAULT_MAX_TOKENS = 4096
+"""Raised from 2048: a dense document (e.g. a German social-insurance notice) now also needs
+room for a frontmatter `identifiers` map plus a body `**Kerndaten**` block per section, on top
+of the narrative extraction. Dream already uses 4096 (`DREAM_MAX_TOKENS`); extraction matches it."""
 
 OKF_VERSION = "0.1"
 UNKNOWN_OKF_TYPE = "Unknown"
@@ -46,8 +49,10 @@ DEFAULT_EXTRACTION_USER_SUFFIX = "\n\nOutput only valid OKF markdown with frontm
 
 FOLDER_SUMMARY_PROMPT_FILE = "folder_summary.md"
 DEFAULT_FOLDER_SUMMARY_PROMPT = (
-    "Write a 2-5 sentence orientation summary of the documents below, in their language. "
-    "Only add a mermaid timeline if there are 3+ clearly sequential dated events."
+    "Write a 2-5 sentence orientation summary of the documents below, in their language, "
+    "naming every organization/party involved and any identifier that recurs across multiple "
+    "documents — this summary is the only part of the folder a cross-folder synthesis pass "
+    "ever reads. Only add a mermaid timeline if there are 3+ clearly sequential dated events."
 )
 
 OCR_LANGUAGES = "deu+eng"
@@ -56,6 +61,11 @@ OCR_LANGUAGES = "deu+eng"
 CHUNK_CHAR_THRESHOLD = 8_000
 """Character budget, not token — the pipeline is model-agnostic (qwen/gemma/llama all
 tokenize differently), so exact token counting would need a specific tokenizer per model."""
+
+CHUNK_OVERLAP_CHARS = 500
+"""Characters of overlap between consecutive chunks so a fact that straddles a chunk
+boundary still appears whole in at least one chunk. Overlap means joining chunks with
+`"".join(chunks)` duplicates the overlapped region — not a lossless partition."""
 
 LLM_LOG_FILENAME = ".okf-llm-log.jsonl"
 """Hidden root-level JSONL log of every LLM call: model, duration, retries, success."""
@@ -102,7 +112,10 @@ DEFAULT_FACT_VERIFICATION_PROMPT = (
     "EXTRACTED MARKDOWN, respond with exactly 'OK' if every fact in the extraction is "
     "actually present in the source and nothing is fabricated, templated, or repeated, or "
     "'FLAGGED: <short reason>' otherwise. Be strict: every extracted fact must be traceable "
-    "to the source text."
+    "to the source text. Also FLAGGED if a clearly recognizable number, case reference "
+    "(Aktenzeichen), amount, or date present in the source is missing from the extraction. "
+    "OK may still apply when the extraction is terse or stylistically different, but never "
+    "when identifiers, amounts, or dates from the source are omitted."
 )
 
 VERIFICATION_FLAGGED_MARKER = "FLAGGED"

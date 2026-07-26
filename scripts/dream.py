@@ -15,8 +15,9 @@ import os
 import sys
 from pathlib import Path
 
-from app.config import load_config
+from app.config import load_config, resolve_document_root
 from app.constants import LLM_LOG_FILENAME
+from app.exceptions import LLMClientError
 from app.services.dream import dream
 from app.services.gating import GatingRules
 from app.services.llm_client import LLMClient
@@ -40,6 +41,12 @@ def main() -> None:
     )
     parser.add_argument("--force", action="store_true", help="Re-dream even when no aggregate changed")
     parser.add_argument("--quiet", action="store_true", help="Suppress progress output")
+    parser.add_argument(
+        "--allow-model-mismatch",
+        action="store_true",
+        help="Proceed even if the server at --host isn't currently serving the configured "
+        "--model (default: abort). See ingest_folder.py --help for why this matters.",
+    )
     args = parser.parse_args()
 
     root = Path(args.folder).expanduser().resolve()
@@ -67,7 +74,16 @@ def main() -> None:
 
     exit_code = 0
     for folder in folders:
-        client = LLMClient(model=model, host=host, log_path=Path(folder) / LLM_LOG_FILENAME)
+        log_path = resolve_document_root(Path(folder)) / LLM_LOG_FILENAME
+        client = LLMClient(model=model, host=host, log_path=log_path)
+        try:
+            client.confirm_model_available()
+        except LLMClientError as mismatch_error:
+            if args.allow_model_mismatch:
+                print(f"warning: {mismatch_error}", file=sys.stderr)
+            else:
+                print(f"error: {mismatch_error}", file=sys.stderr)
+                sys.exit(1)
         result = dream(
             folder,
             client=client,

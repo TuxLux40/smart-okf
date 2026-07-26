@@ -122,3 +122,51 @@ def test_describe_image_logs_vision_model_not_extraction_model(tmp_path: Path, m
 
     record = json.loads(log_path.read_text(encoding="utf-8").strip())
     assert record["model"] == "vision-model"
+
+
+def _fake_models_list(*ids: str) -> SimpleNamespace:
+    return SimpleNamespace(data=[SimpleNamespace(id=model_id) for model_id in ids])
+
+
+def test_available_models_returns_ids_from_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _client(tmp_path, log=False)
+    monkeypatch.setattr(client._client.models, "list", lambda: _fake_models_list("gemma-4-e4b", "llama-3.2-1b"))
+
+    assert client.available_models() == ["gemma-4-e4b", "llama-3.2-1b"]
+
+
+def test_available_models_raises_llm_client_error_on_connection_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _client(tmp_path, log=False)
+
+    def _fail() -> None:
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(client._client.models, "list", _fail)
+
+    with pytest.raises(LLMClientError):
+        client.available_models()
+
+
+def test_confirm_model_available_passes_silently_when_model_is_loaded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = LLMClient(host="http://127.0.0.1:1", model="gemma-4-e4b")
+    monkeypatch.setattr(client._client.models, "list", lambda: _fake_models_list("gemma-4-e4b"))
+
+    client.confirm_model_available()  # must not raise
+
+
+def test_confirm_model_available_raises_with_configured_and_actual_models_in_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = LLMClient(host="http://127.0.0.1:1", model="google/gemma-4-e4b")
+    monkeypatch.setattr(client._client.models, "list", lambda: _fake_models_list("llama-3.2-1b-instruct"))
+
+    with pytest.raises(LLMClientError) as excinfo:
+        client.confirm_model_available()
+
+    message = str(excinfo.value)
+    assert "google/gemma-4-e4b" in message
+    assert "llama-3.2-1b-instruct" in message

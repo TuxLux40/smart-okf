@@ -6,7 +6,14 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from app.config import SmartOkfConfig, config_path_for_root, host_is_allowlisted, load_config, parse_llm_host
+from app.config import (
+    SmartOkfConfig,
+    config_path_for_root,
+    host_is_allowlisted,
+    load_config,
+    parse_llm_host,
+    resolve_document_root,
+)
 
 
 def _config(**overrides: object) -> SmartOkfConfig:
@@ -102,6 +109,26 @@ def test_config_path_for_root_is_hidden_folder_inside_root(tmp_path: Path) -> No
 
 def test_load_config_returns_none_without_a_config_file(tmp_path: Path) -> None:
     assert load_config(tmp_path) is None
+
+
+def test_resolve_document_root_returns_start_when_no_config_anywhere(tmp_path: Path) -> None:
+    assert resolve_document_root(tmp_path) == tmp_path
+
+
+def test_resolve_document_root_returns_start_when_config_is_at_start(tmp_path: Path) -> None:
+    (tmp_path / ".smart-okf").mkdir()
+    (tmp_path / ".smart-okf" / "config.yaml").write_text("llm_model: foo\n", encoding="utf-8")
+
+    assert resolve_document_root(tmp_path) == tmp_path
+
+
+def test_resolve_document_root_walks_up_to_the_ancestor_with_config(tmp_path: Path) -> None:
+    (tmp_path / ".smart-okf").mkdir()
+    (tmp_path / ".smart-okf" / "config.yaml").write_text("llm_model: foo\n", encoding="utf-8")
+    subfolder = tmp_path / "finances" / "banks"
+    subfolder.mkdir(parents=True)
+
+    assert resolve_document_root(subfolder) == tmp_path
 
 
 def test_load_config_reads_yaml_from_the_document_root(tmp_path: Path) -> None:

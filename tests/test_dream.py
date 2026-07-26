@@ -65,6 +65,37 @@ def test_build_digest_is_compact_identity_not_full_body(tmp_path: Path) -> None:
     assert "Extracted: Contract 123456789" not in digest  # section bodies stay out
 
 
+def test_build_digest_includes_identifiers_from_frontmatter(tmp_path: Path) -> None:
+    from app.models.okf import OKFDocument, OKFFrontmatter
+
+    folder = tmp_path / "insurances"
+    folder.mkdir()
+    aggregate = folder / "insurances.md"
+    aggregate.write_text(
+        OKFDocument(
+            frontmatter=OKFFrontmatter(
+                type="FolderSummary",
+                description=None,
+                source=None,
+                sources=["meldung.pdf"],
+                identifiers={
+                    "versicherungsnummer": ["13040393S105"],
+                    "betriebsnummer": ["15027365", "32268191"],
+                },
+            ),
+            body="## Meldung\n\nOrientation only in digest; body stays out.\n\n_Source: meldung.pdf_",
+        ).to_markdown(),
+        encoding="utf-8",
+    )
+
+    digest = build_digest(aggregate, tmp_path)
+
+    assert "Identifiers:" in digest
+    assert "versicherungsnummer: 13040393S105" in digest
+    assert "betriebsnummer: 15027365, 32268191" in digest
+    assert "Orientation only in digest" not in digest  # body still excluded
+
+
 def test_dream_writes_synthesis_with_type_and_hashes(tmp_path: Path) -> None:
     _build_tree(tmp_path)
     client = _DreamStub()

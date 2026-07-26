@@ -225,6 +225,80 @@ def test_merge_chunk_documents_fills_empty_first_chunk_identity() -> None:
     assert "part one" in merged.body and "part two" in merged.body
 
 
+def test_merge_chunk_documents_unions_identifiers_sorted_deduped() -> None:
+    from app.models.okf import OKFDocument, OKFFrontmatter
+    from app.services.ingest import merge_chunk_documents
+
+    first = OKFDocument(
+        frontmatter=OKFFrontmatter(
+            type="Fact",
+            description=None,
+            source=None,
+            identifiers={"personalnummer": ["02093612"], "betriebsnummer": ["32268191"]},
+        ),
+        body="part one",
+    )
+    second = OKFDocument(
+        frontmatter=OKFFrontmatter(
+            type="Fact",
+            description=None,
+            source=None,
+            identifiers={
+                "betriebsnummer": ["15027365", "32268191"],  # one duplicate, one new
+                "versicherungsnummer": ["13040393S105"],
+            },
+        ),
+        body="part two",
+    )
+
+    merged = merge_chunk_documents([first, second])
+
+    assert merged.frontmatter.identifiers == {
+        "betriebsnummer": ["15027365", "32268191"],
+        "personalnummer": ["02093612"],
+        "versicherungsnummer": ["13040393S105"],
+    }
+
+
+def test_aggregate_frontmatter_unions_identifiers_from_documents(tmp_path: Path) -> None:
+    class _IdClient:
+        def __init__(self) -> None:
+            self._by_text = {
+                "doc A content": (
+                    "---\ntype: Fact\nidentifiers:\n  personalnummer:\n    - '02093612'\n"
+                    "  betriebsnummer:\n    - '32268191'\n---\n\nFacts from A"
+                ),
+                "doc B content": (
+                    "---\ntype: Fact\nidentifiers:\n  personalnummer:\n    - '11112222'\n"
+                    "  betriebsnummer:\n    - '15027365'\n---\n\nFacts from B"
+                ),
+            }
+
+        def extract_structured(self, raw_text: str, context: str = "") -> str:
+            return self._by_text[raw_text.strip()]
+
+        def summarize_sections(self, merged_sections: str) -> str:
+            return ""
+
+        def verify_facts(self, source_text: str, extracted_markdown: str, *, max_tokens: int | None = None) -> str:
+            return "OK"
+
+    folder = tmp_path / "social"
+    folder.mkdir()
+    (folder / "a.txt").write_text("doc A content", encoding="utf-8")
+    (folder / "b.txt").write_text("doc B content", encoding="utf-8")
+
+    ingest_folder(str(tmp_path), client=_IdClient())  # type: ignore[arg-type]
+
+    from app.models.okf import OKFDocument
+
+    aggregate = OKFDocument.from_markdown((folder / "social.md").read_text(encoding="utf-8"))
+    assert aggregate.frontmatter.identifiers == {
+        "betriebsnummer": ["15027365", "32268191"],
+        "personalnummer": ["02093612", "11112222"],
+    }
+
+
 def test_oversized_document_is_chunked_and_merged_into_one_section(tmp_path: Path) -> None:
     import re
 
@@ -581,3 +655,67 @@ def test_ingest_generates_navigation_readme_by_default(tmp_path: Path) -> None:
     readme = tmp_path / "README.md"
     assert readme.is_file()
     assert "knowledge base" in readme.read_text(encoding="utf-8")
+
+
+class _ThinBodyStubLLMClient(_StubLLMClient):
+    """Extracts successfully, but with a body too thin to pass the density check —
+    the shape a weak/undersized model produces (fluent, non-empty, but not really
+    grounded in the source)."""
+
+    def extract_structured(self, raw_text: str, context: str = "") -> str:
+        self.calls += 1
+        return "---\ntype: Fact\ndescription: x\n---\n\nX"
+
+
+def test_folder_level_validation_failure_is_flagged_in_the_written_aggregate(tmp_path: Path) -> None:
+    """A folder-level heuristic failure (here: body too thin per source) must be visible
+    directly in the written .md — same `_Verification: FLAGGED` marker `render_section`
+    already uses for a per-document fact-check failure — so an agent reading only the
+    aggregate (not separately running validate_okf.py) still sees it's untrusted."""
+    providers = tmp_path / "providers"
+    providers.mkdir()
+    (providers / "isp.txt").write_text("a" * 500, encoding="utf-8")
+
+    result = ingest_folder(str(tmp_path), client=_ThinBodyStubLLMClient())  # type: ignore[arg-type]
+
+    assert result.flagged
+    aggregate_text = (providers / "providers.md").read_text(encoding="utf-8")
+    assert "_Verification: FLAGGED" in aggregate_text
+    assert "body has at least" in aggregate_text
+
+
+class _AlwaysFailingLLMClient:
+    """Every extraction attempt raises — simulates a folder where nothing can be read."""
+
+    def extract_structured(self, raw_text: str, context: str = "") -> str:
+        raise RuntimeError("simulated extraction failure")
+
+    def summarize_sections(self, merged_sections: str) -> str:
+        return ""
+
+    def verify_facts(self, source_text: str, extracted_markdown: str, *, max_tokens: int | None = None) -> str:
+        return "OK"
+
+
+def test_preexisting_fabricated_aggregate_is_overwritten_with_a_flag_when_reextraction_also_fails(
+    tmp_path: Path,
+) -> None:
+    """Reproduces the exact legacy bug this guards against: an aggregate with `sources: []`
+    already sitting on disk (e.g. from an old buggy ingest run) for a folder whose real
+    files were never actually read. If a later re-ingest attempt *also* fails to extract
+    anything, the stale fabricated file must not be left silently in place looking like a
+    normal, trustworthy aggregate forever — it must be rewritten as an explicit flag."""
+    providers = tmp_path / "providers"
+    providers.mkdir()
+    (providers / "isp.txt").write_text("real contract text", encoding="utf-8")
+    (providers / "providers.md").write_text(
+        "---\ntype: FolderSummary\ndescription: fabricated\nsources: []\n---\n\nMaterial zu Providers.\n",
+        encoding="utf-8",
+    )
+
+    result = ingest_folder(str(tmp_path), client=_AlwaysFailingLLMClient())  # type: ignore[arg-type]
+
+    assert result.flagged
+    aggregate_text = (providers / "providers.md").read_text(encoding="utf-8")
+    assert "_Verification: FLAGGED" in aggregate_text
+    assert "Material zu Providers" not in aggregate_text

@@ -27,7 +27,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from app.constants import FOLDER_SUMMARY_OKF_TYPE, MATTER_OKF_TYPE
+from app.constants import FOLDER_SUMMARY_OKF_TYPE, MATTER_OKF_TYPE, TRANSCRIPTS_DIR_NAME
 from app.models.okf import OKFDocument
 from app.services.ingest import _SOURCE_MARKER_PATTERN, load_existing_summary
 
@@ -78,6 +78,133 @@ with only the timestamp changing until the model hit its token limit)."""
 
 _DIGIT_PATTERN = re.compile(r"\d")
 
+# --- Identifier-loss check (transcript vs aggregate body) ---
+# Precision over recall: only label-driven matches and a few high-confidence free-form
+# patterns. Bare 4–6 digit runs without a label are intentionally ignored (page numbers,
+# PLZ, date fragments, OCR noise).
+
+_IDENTIFIER_LABELS = (
+    "Rentenversicherungsnummer",
+    "Versicherungsnummer",
+    "Versichertennummer",
+    "Mitgliedsnummer",
+    "Personalnummer",
+    "Kundennummer",
+    "Vertragsnummer",
+    "Rechnungsnummer",
+    "Bestellnummer",
+    "Auftragsnummer",
+    "Antragsnummer",
+    "Aktenzeichen",
+    "Geschäftszeichen",
+    "Betriebsnummer",
+    "Betr-Nr",
+    "Tätigkeitsschlüssel",
+    "Dienststelle",
+    "Kostenstelle",
+    "Steuer-ID",
+    "IdNr",
+    "Steuernummer",
+    "Zählernummer",
+    "Zählpunkt",
+    "Marktlokation",
+    "Gläubiger-ID",
+    "Mandatsreferenz",
+    "Depotnummer",
+    "Depot",
+    "IBAN",
+    "BIC",
+    "ISIN",
+)
+"""German document labels that precede a durable identifier. Longer labels first so
+`Rentenversicherungsnummer` wins over bare `Versicherungsnummer` when both match."""
+
+_VALUE_FIRST_TOKEN = r"[A-Za-z0-9](?:[A-Za-z0-9./-]*[A-Za-z0-9])?"
+"""The identifier's first token: alnum, optionally with internal `.`/`/`/`-`
+(covers `12`, `1383617673`, `13040393S105`)."""
+
+_VALUE_CONT_TOKEN = r"(?:\b[A-Za-z]\b|[A-Za-z0-9./-]*\d[A-Za-z0-9./-]*)"
+"""A token that can *continue* a split identifier value: either a single stray letter
+(`S`, `O` — the middle letter of an RVNR or an Aktenzeichen court code) or any token that
+itself contains a digit (`105`, `345/23`). Deliberately excludes multi-letter, digit-free
+words — `des`, `vor`, `Bank`, `GmbH` — so trailing prose after the real value is never
+swallowed. `\\b[A-Za-z]\\b` (not bare `[A-Za-z]`) so it can't match just the first letter
+of a longer word."""
+
+_LABEL_PATTERN = re.compile(
+    r"(?P<label>"
+    + "|".join(re.escape(label) for label in sorted(_IDENTIFIER_LABELS, key=len, reverse=True))
+    + r")[\s:]*(?P<value>"
+    + _VALUE_FIRST_TOKEN
+    + r"(?: "
+    + _VALUE_CONT_TOKEN
+    + r"){0,3})",
+    re.IGNORECASE | re.MULTILINE,
+)
+"""Captures up to 4 space-separated value tokens after a label — enough for split forms
+like `13040393 S 105` or `12 O 345/23` — without swallowing trailing prose. A naive
+`\\S[^\\n]*` here would capture 'Kundennummer: 1383617673 (SWK Bank Finanzierung GmbH)'
+as one value, which then never matches the aggregate body verbatim (false FLAGGED)."""
+
+_IBAN_PATTERN = re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b")
+_STEUER_ID_PATTERN = re.compile(r"(?<!\d)\d{11}(?!\d)")
+_RVNR_PATTERN = re.compile(r"\b\d{8}[A-Z]\d{3}\b", re.IGNORECASE)
+_ISIN_PATTERN = re.compile(r"\b[A-Z]{2}[A-Z0-9]{9}\d\b", re.IGNORECASE)
+
+_MAX_MISSING_EVIDENCE = 8
+"""Cap listed missing identifiers in a finding so a catastrophic loss stays readable."""
+
+
+def _normalize_identifier(value: str) -> str:
+    """Strip spaces and dots so `13040393 S 105` matches `13040393S105`."""
+    return re.sub(r"[\s.]", "", value)
+
+
+def extract_identifiers_from_transcript(text: str) -> list[tuple[str, str]]:
+    """Return (label, value) pairs found in raw transcript text.
+
+    Label-driven matches use the curated German list; free-form patterns only cover
+    formats confident enough to stand alone (IBAN, Steuer-ID, RVNR, ISIN).
+    """
+    found: list[tuple[str, str]] = []
+    seen_normalized: set[str] = set()
+
+    def _add(label: str, value: str) -> None:
+        cleaned = value.strip().rstrip(".,;:")
+        if not cleaned:
+            return
+        key = _normalize_identifier(cleaned).upper()
+        if not key or key in seen_normalized:
+            return
+        seen_normalized.add(key)
+        found.append((label, cleaned))
+
+    for match in _LABEL_PATTERN.finditer(text):
+        _add(match.group("label"), match.group("value"))
+
+    for match in _IBAN_PATTERN.finditer(text):
+        _add("IBAN", match.group(0))
+    for match in _STEUER_ID_PATTERN.finditer(text):
+        _add("Steuer-ID", match.group(0))
+    for match in _RVNR_PATTERN.finditer(text):
+        _add("Rentenversicherungsnummer", match.group(0))
+    for match in _ISIN_PATTERN.finditer(text):
+        _add("ISIN", match.group(0))
+
+    return found
+
+
+def _identifier_present_in_body(value: str, body_normalized: str) -> bool:
+    """True if the identifier's normalized form appears in the normalized body."""
+    needle = _normalize_identifier(value).upper()
+    return bool(needle) and needle in body_normalized
+
+
+def _transcript_path_for_source(transcripts_root: Path, source: str) -> Path:
+    """Resolve `.okf-transcripts/<relpath>.txt` for a frontmatter source path."""
+    relative = Path(source)
+    return transcripts_root / relative.parent / f"{relative.name}.txt"
+
 
 def _normalize_block_for_repetition(block: str) -> str:
     """Collapse whitespace and digits so near-duplicate blocks compare equal."""
@@ -104,6 +231,70 @@ class ValidationFinding:
     evidence: str = ""
 
 
+def _check_identifiers_from_transcripts(
+    document: OKFDocument,
+    *,
+    transcripts_root: Path | None,
+) -> ValidationFinding:
+    """Deterministic check: labeled/format identifiers in transcripts must appear in body.
+
+    No transcript available (missing root, missing files, empty sources) → skip with a
+    note, not a failure — tree coverage is still patchy until a full re-ingest.
+    """
+    finding_text = "identifiers from the source transcript appear in the aggregate"
+    if transcripts_root is None or not document.frontmatter.sources:
+        return ValidationFinding(
+            text=finding_text,
+            passed=True,
+            evidence="no transcript available — identifier check skipped",
+        )
+
+    collected: list[tuple[str, str]] = []
+    any_transcript = False
+    for source in document.frontmatter.sources:
+        path = _transcript_path_for_source(transcripts_root, source)
+        if not path.is_file():
+            continue
+        any_transcript = True
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        collected.extend(extract_identifiers_from_transcript(text))
+
+    if not any_transcript:
+        return ValidationFinding(
+            text=finding_text,
+            passed=True,
+            evidence="no transcript available — identifier check skipped",
+        )
+
+    if not collected:
+        return ValidationFinding(
+            text=finding_text,
+            passed=True,
+            evidence="no labeled/high-confidence identifiers found in transcript(s)",
+        )
+
+    body_normalized = _normalize_identifier(document.body).upper()
+    missing = [(label, value) for label, value in collected if not _identifier_present_in_body(value, body_normalized)]
+    if not missing:
+        return ValidationFinding(
+            text=finding_text,
+            passed=True,
+            evidence=f"all {len(collected)} transcript identifier(s) present in body",
+        )
+
+    shown = missing[:_MAX_MISSING_EVIDENCE]
+    listed = ", ".join(f"{label}={value}" for label, value in shown)
+    extra = f" (+{len(missing) - len(shown)} more)" if len(missing) > len(shown) else ""
+    return ValidationFinding(
+        text=finding_text,
+        passed=False,
+        evidence=f"missing: {listed}{extra}",
+    )
+
+
 @dataclass
 class ValidationReport:
     """All findings for one document."""
@@ -122,8 +313,19 @@ class ValidationReport:
         return [finding for finding in self.findings if not finding.passed]
 
 
-def validate_aggregate(document: OKFDocument, path: Path) -> ValidationReport:
-    """Run heuristic plausibility checks against one FolderSummary/Matter document."""
+def validate_aggregate(
+    document: OKFDocument,
+    path: Path,
+    *,
+    transcripts_root: Path | None = None,
+) -> ValidationReport:
+    """Run heuristic plausibility checks against one FolderSummary/Matter document.
+
+    `transcripts_root` is the `.okf-transcripts/` directory (sibling-tree of source
+    transcripts). When omitted or when a source has no transcript yet, the identifier-loss
+    check is skipped (passed with a note) rather than failed — coverage is still patchy
+    until a full re-ingest rewrites transcripts for every source.
+    """
     findings: list[ValidationFinding] = []
     sources = document.frontmatter.sources
     body = document.body.strip()
@@ -224,7 +426,24 @@ def validate_aggregate(document: OKFDocument, path: Path) -> ValidationReport:
         )
     )
 
+    findings.append(_check_identifiers_from_transcripts(document, transcripts_root=transcripts_root))
+
     return ValidationReport(path=path, findings=findings)
+
+
+def render_validation_banner(report: ValidationReport) -> str:
+    """One `_Verification: FLAGGED — <reason>_` line per failed check in `report`.
+
+    Reuses `render_section`'s existing per-document marker convention (a failed fact-check
+    on one source document already renders as `_Verification: FLAGGED — <reason>_` inline)
+    so a folder-level heuristic failure — fabricated placeholder, missing citations, a body
+    too thin for its source count — is visible the same way, in the same file, without a
+    reader needing to separately run `validate_okf.py` and cross-reference paths by hand.
+    `ingest.py`/`matter_files.py` prepend this to the body whenever `validate_aggregate`
+    fails, so "no `_Verification: FLAGGED` anywhere in this file" becomes a reliable signal
+    that the aggregate/matter can be trusted without reopening the source documents.
+    """
+    return "\n\n".join(f"_Verification: FLAGGED — {finding.text}: {finding.evidence}_" for finding in report.failures)
 
 
 def validate_tree(root: Path) -> list[ValidationReport]:
@@ -232,7 +451,9 @@ def validate_tree(root: Path) -> list[ValidationReport]:
 
     Returns one report per document found — check `.passed` / `.failures` on each
     rather than filtering here, so callers can report totals (e.g. "12/45 clean").
+    Transcripts are resolved under `<root>/.okf-transcripts/` when present.
     """
+    transcripts_root = root / TRANSCRIPTS_DIR_NAME
     reports: list[ValidationReport] = []
     for path in sorted(root.rglob("*.md")):
         relative_parts = path.relative_to(root).parts
@@ -240,5 +461,5 @@ def validate_tree(root: Path) -> list[ValidationReport]:
             continue
         document = load_existing_summary(path)
         if document is not None and document.frontmatter.type in VALIDATABLE_OKF_TYPES:
-            reports.append(validate_aggregate(document, path))
+            reports.append(validate_aggregate(document, path, transcripts_root=transcripts_root))
     return reports

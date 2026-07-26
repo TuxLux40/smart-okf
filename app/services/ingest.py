@@ -166,12 +166,28 @@ def extract_document(
     return document, verification
 
 
+def merge_identifiers(*maps: dict[str, list[str]]) -> dict[str, list[str]]:
+    """Union identifier maps: keys sorted, values per key sorted and deduplicated.
+
+    Deterministic so re-ingest of the same inputs produces identical frontmatter (no Git churn).
+    """
+    merged: dict[str, set[str]] = {}
+    for mapping in maps:
+        for key, values in mapping.items():
+            bucket = merged.setdefault(key, set())
+            for value in values:
+                if value:
+                    bucket.add(value)
+    return {key: sorted(values) for key, values in sorted(merged.items()) if values}
+
+
 def merge_chunk_documents(documents: list[OKFDocument]) -> OKFDocument:
     """Merge multiple chunk-extracted documents (one file, split across LLM calls) into one.
 
     Prefer first-chunk identity (letterhead/subject usually lives at the top). Empty
     title/description/source on the first chunk are filled from later chunks when present.
-    Tags are the ordered union across all chunks. Bodies concatenate in chunk order.
+    Tags are the ordered union across all chunks. Identifiers are the sorted, deduplicated
+    union of every chunk's `identifiers` map. Bodies concatenate in chunk order.
     """
     if not documents:
         raise ValueError("merge_chunk_documents requires at least one document")
@@ -184,7 +200,9 @@ def merge_chunk_documents(documents: list[OKFDocument]) -> OKFDocument:
             if tag not in tags:
                 tags.append(tag)
 
-    updates: FrontmatterPatch = {"tags": tags}
+    identifiers = merge_identifiers(*(document.frontmatter.identifiers for document in documents))
+
+    updates: FrontmatterPatch = {"tags": tags, "identifiers": identifiers}
     base = documents[0].frontmatter
     for field_name in ("title", "description", "source"):
         if getattr(base, field_name):
@@ -424,6 +442,9 @@ def _ingest_directory(
 
     sections: list[str] = []
     tags: list[str] = [] if existing is None else list(existing.frontmatter.tags)
+    # Start from existing identifiers on incremental re-ingest (reused sections have no
+    # per-document frontmatter to re-read); newly extracted docs union in below.
+    identifier_maps: list[dict[str, list[str]]] = [] if existing is None else [dict(existing.frontmatter.identifiers)]
     extracted_any = False
     ingested_files: list[Path] = []
 
@@ -469,8 +490,48 @@ def _ingest_directory(
         for tag in document.frontmatter.tags:
             if tag not in tags:
                 tags.append(tag)
+        if document.frontmatter.identifiers:
+            identifier_maps.append(document.frontmatter.identifiers)
 
     if not ingested_files:
+        if existing is not None:
+            # Every file in this folder failed extraction *and* none had a reusable old
+            # section to fall back on — only reachable when the existing aggregate already
+            # had no real `source_hashes` for these files (a pre-existing fabricated/legacy
+            # aggregate, e.g. `sources: []`) and this run couldn't fix it either. Left alone,
+            # that stale file would keep looking like a normal, silent, unflagged aggregate
+            # forever. Overwrite it with an explicit flag instead of leaving it untouched.
+            from app.services.validation import ValidationFinding, ValidationReport, render_validation_banner
+
+            report = ValidationReport(
+                path=summary_path,
+                findings=[
+                    ValidationFinding(
+                        text="extraction succeeded for at least one source this run",
+                        passed=False,
+                        evidence=(
+                            f"all {len(files)} file(s) in this folder failed extraction and none had a "
+                            "reusable prior section — see the skip reasons above for why"
+                        ),
+                    )
+                ],
+            )
+            flagged_summary = OKFDocument(
+                frontmatter=OKFFrontmatter(
+                    type=FOLDER_SUMMARY_OKF_TYPE,
+                    title=directory.name.replace("_", " ").title(),
+                    description="Extraction failed for every source file in this folder.",
+                    tags=list(existing.frontmatter.tags),
+                    source=None,
+                    sources=[],
+                    source_hashes={},
+                ),
+                body=render_validation_banner(report),
+            )
+            summary_path.write_text(flagged_summary.to_markdown(), encoding="utf-8")
+            result.flagged.append((summary_path, "extraction failed for every source file"))
+            if verbose:
+                print(f"  Flagged {summary_path}: extraction failed for every source file")
         return
     if not extracted_any and existing is not None and current_hashes == old_hashes:
         result.unchanged_dirs.append(directory)
@@ -485,6 +546,7 @@ def _ingest_directory(
         source=None,
         sources=[str(f.relative_to(root)) for f in ingested_files],
         source_hashes=current_hashes,
+        identifiers=merge_identifiers(*identifier_maps),
     )
     joined_sections = "\n\n".join(sections)
     body = joined_sections
@@ -496,6 +558,24 @@ def _ingest_directory(
     if orientation:
         body = f"{orientation}\n\n{joined_sections}"
     summary = OKFDocument(frontmatter=frontmatter, body=body)
+
+    # Lazy import: validation.py imports `_SOURCE_MARKER_PATTERN`/`load_existing_summary`
+    # from this module, so a top-level import here would be circular. Folder-level
+    # heuristic checks (fabricated placeholder, missing citations, thin body) get the
+    # same `_Verification: FLAGGED` marker `render_section` already uses for a failed
+    # per-document fact-check, so "no flag anywhere in the file" stays one reliable
+    # trust signal instead of two (an in-body marker plus a separate script to remember
+    # to run) — see `render_validation_banner`.
+    from app.services.validation import render_validation_banner, validate_aggregate
+
+    validation = validate_aggregate(summary, summary_path, transcripts_root=root / TRANSCRIPTS_DIR_NAME)
+    if not validation.passed:
+        banner = render_validation_banner(validation)
+        summary = OKFDocument(frontmatter=frontmatter, body=f"{banner}\n\n{body}")
+        result.flagged.append((summary_path, "; ".join(finding.text for finding in validation.failures)))
+        if verbose:
+            print(f"  Flagged {summary_path}: {'; '.join(finding.text for finding in validation.failures)}")
+
     summary_path.write_text(summary.to_markdown(), encoding="utf-8")
     result.written_paths.append(summary_path)
     if verbose:

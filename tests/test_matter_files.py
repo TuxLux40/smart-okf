@@ -2,6 +2,9 @@
 
 from pathlib import Path
 
+import pytest
+
+from app.services import validation as validation_module
 from app.services.matter_files import (
     group_source_hashes,
     load_matter_body,
@@ -35,13 +38,42 @@ def test_write_matter_file_round_trips_type_and_hashes(tmp_path: Path) -> None:
     b = _write(tmp_path / "finances" / "finances.md")
     group = [a, b]
 
-    path = write_matter_file(tmp_path, group, ["999888777"], "### Matter\n\nDense write-up.")
+    path = write_matter_file(
+        tmp_path,
+        group,
+        ["999888777"],
+        "### Matter\n\nA fact-dense write-up citing reference 999888777 across both aggregates, "
+        "with enough real content per source to read as a genuine deep-dive, not a placeholder.",
+    )
 
     assert path == matter_path(tmp_path, ["999888777"], group)
     content = path.read_text(encoding="utf-8")
     assert "type: Matter" in content
-    assert "Dense write-up." in content
+    assert "fact-dense write-up" in content
     assert "providers/providers.md" in content  # linked in the involved-aggregates list
+    assert "_Verification: FLAGGED" not in content  # a normal write must not be flagged
+
+
+def test_write_matter_file_flags_when_validation_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Same `_Verification: FLAGGED` marker `ingest.py` prepends to a FolderSummary must also
+    apply to Matter files — a cross-folder matter deserves the same "don't trust this without
+    checking" visibility as a folder aggregate. Failure is forced via monkeypatch rather than
+    crafted content: `write_matter_file`'s own `links` block always textually contains every
+    source it claims, so the real validator has no natural way to fail against output the
+    function generates correctly — this test is about the wiring, not about reproducing a
+    real failure shape (see test_ingest.py for that)."""
+    a = _write(tmp_path / "providers" / "providers.md")
+    group = [a]
+    fake_report = validation_module.ValidationReport(
+        path=tmp_path / "matters" / "fake.md",
+        findings=[validation_module.ValidationFinding(text="fake check", passed=False, evidence="fake reason")],
+    )
+    monkeypatch.setattr(validation_module, "validate_aggregate", lambda document, path, **_kwargs: fake_report)
+
+    path = write_matter_file(tmp_path, group, ["999888777"], "### Matter\n\ntext")
+
+    content = path.read_text(encoding="utf-8")
+    assert "_Verification: FLAGGED — fake check: fake reason_" in content
 
 
 def test_matter_unchanged_true_when_hashes_match(tmp_path: Path) -> None:

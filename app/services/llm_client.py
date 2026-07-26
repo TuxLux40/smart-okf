@@ -237,3 +237,37 @@ class LLMClient:
         system_prompt = load_fact_verification_prompt()
         user_prompt = f"SOURCE TEXT:\n{source_text}\n\nEXTRACTED MARKDOWN:\n{extracted_markdown}"
         return self.chat(system_prompt, user_prompt, max_tokens=max_tokens)
+
+    def available_models(self) -> list[str]:
+        """Model ids the server at `self.host` currently reports (`GET /v1/models`).
+
+        LM Studio/Ollama/llama.cpp serve whatever model happens to be loaded regardless
+        of what a client asks for by name — pointing `self.model` at a config value does
+        not make the server load it. Used by `confirm_model_available` to catch a
+        silently swapped/stale model before it degrades a whole ingest run.
+        """
+        try:
+            response = self._client.models.list()
+        except Exception as error:
+            raise LLMClientError(f"Could not reach {self.host} to list loaded models: {error}") from error
+        return [item.id for item in response.data]
+
+    def confirm_model_available(self) -> None:
+        """Raise `LLMClientError` if `self.model` is not currently loaded at `self.host`.
+
+        Observed failure this guards against: config says `google/gemma-4-e4b`, but
+        LM Studio actually had `llama-3.2-1b-instruct` loaded (then later
+        `openai/gpt-oss-20b` after a UI model swap) — every extraction that run used
+        whatever was loaded, silently, with no error anywhere. A 1B model hallucinated
+        dates and domain terms in otherwise-plausible-looking aggregates. Call once per
+        configured client before a real ingest/dream run, not per-file.
+        """
+        available = self.available_models()
+        if self.model not in available:
+            raise LLMClientError(
+                f"Configured model {self.model!r} is not loaded at {self.host} "
+                f"(server currently reports: {', '.join(available) if available else 'no models'}). "
+                "Load the configured model in your LLM server, fix llm_model/dream_model/verify_model "
+                "in config, or pass --allow-model-mismatch to proceed anyway (not recommended — "
+                "extraction quality is not guaranteed with an unverified model)."
+            )

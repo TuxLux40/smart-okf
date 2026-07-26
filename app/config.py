@@ -62,6 +62,25 @@ def find_config_path(start: Path) -> Path | None:
     return None
 
 
+def resolve_document_root(start: Path) -> Path:
+    """The true document root for `start`: the ancestor holding `.smart-okf/config.yaml`,
+    or `start` itself if none is found (fresh/unconfigured root).
+
+    Scripts may legitimately be pointed at a subfolder of an already-onboarded root (an
+    ingest smoke test on one subfolder, per SKILL.md) — root-level artifacts like
+    `.okf-llm-log.jsonl` should still land at the real root every time, not scatter into
+    whatever subfolder a given invocation happened to target. Without this, running
+    ingest against `documents/finances` one day and `documents/health` another leaves N
+    fragmented logs instead of one, and folders never targeted directly (e.g. a root-level
+    `documents/other` nobody explicitly ingested) end up with no log at all even though
+    ingest ran elsewhere in the same tree.
+    """
+    config_path = find_config_path(start)
+    if config_path is not None:
+        return config_path.parent.parent
+    return start
+
+
 def parse_llm_host(value: str) -> str:
     """Extract a bare hostname from a URL or `host:port` string.
 

@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from app.models.okf import OKFDocument, OKFFrontmatter
-from app.services.validation import validate_aggregate, validate_tree
+from app.services.validation import ValidationFinding, ValidationReport, validate_aggregate, validate_tree
 
 _DUMMY_PATH = Path("dummy.md")
 
@@ -217,3 +217,102 @@ def test_validate_tree_skips_hidden_directories(tmp_path: Path) -> None:
     reports = validate_tree(tmp_path)
 
     assert reports == []
+
+
+def _write_transcript(root: Path, source: str, text: str) -> Path:
+    """Mirror ingest's `.okf-transcripts/<relpath>.txt` layout under root."""
+    relative = Path(source)
+    target = root / ".okf-transcripts" / relative.parent / f"{relative.name}.txt"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+    return target
+
+
+def _identifier_finding(report: ValidationReport) -> ValidationFinding:
+    return next(f for f in report.findings if "identifiers from the source transcript" in f.text)
+
+
+def test_missing_transcript_identifier_fails(tmp_path: Path) -> None:
+    source = "social/meldung.pdf"
+    _write_transcript(tmp_path, source, "Versicherungsnummer: 13040393S105\nPersonalnummer: 02093612\n")
+    document = _document(
+        sources=[source],
+        body=(
+            "## Meldung\n\nGenuine content about employment without any of the source numbers.\n\n_Source: meldung.pdf_"
+        ),
+    )
+
+    report = validate_aggregate(document, _DUMMY_PATH, transcripts_root=tmp_path / ".okf-transcripts")
+
+    finding = _identifier_finding(report)
+    assert not finding.passed
+    assert "13040393S105" in finding.evidence
+
+
+def test_present_transcript_identifier_passes(tmp_path: Path) -> None:
+    source = "social/meldung.pdf"
+    _write_transcript(tmp_path, source, "Versicherungsnummer: 13040393S105\n")
+    document = _document(
+        sources=[source],
+        body=(
+            "## Meldung\n\n**Kerndaten**\n- Versicherungsnummer: 13040393S105\n\n"
+            "Genuine content with the identifier retained.\n\n_Source: meldung.pdf_"
+        ),
+    )
+
+    report = validate_aggregate(document, _DUMMY_PATH, transcripts_root=tmp_path / ".okf-transcripts")
+
+    finding = _identifier_finding(report)
+    assert finding.passed
+    assert report.passed
+
+
+def test_identifier_normalization_ignores_spaces_and_dots(tmp_path: Path) -> None:
+    source = "social/meldung.pdf"
+    # Transcript has spaced form; aggregate body has compact form — both must match.
+    _write_transcript(tmp_path, source, "Versicherungsnummer: 13040393 S 105\n")
+    document = _document(
+        sources=[source],
+        body=(
+            "## Meldung\n\n**Kerndaten**\n- Versicherungsnummer: 13040393S105\n\n"
+            "Genuine content past the density floor.\n\n_Source: meldung.pdf_"
+        ),
+    )
+
+    report = validate_aggregate(document, _DUMMY_PATH, transcripts_root=tmp_path / ".okf-transcripts")
+
+    finding = _identifier_finding(report)
+    assert finding.passed
+
+
+def test_no_transcript_skips_identifier_check_not_fail(tmp_path: Path) -> None:
+    document = _document(
+        sources=["social/meldung.pdf"],
+        body=(
+            "## Meldung\n\nGenuine content without any transcript to compare against at all.\n\n_Source: meldung.pdf_"
+        ),
+    )
+
+    report = validate_aggregate(document, _DUMMY_PATH, transcripts_root=tmp_path / ".okf-transcripts")
+
+    finding = _identifier_finding(report)
+    assert finding.passed
+    assert "no transcript available" in finding.evidence
+    assert report.passed
+
+
+def test_bare_five_digit_number_without_label_does_not_flag(tmp_path: Path) -> None:
+    # Precision over recall: page numbers / PLZ / date fragments without a label must
+    # not become identifier findings.
+    source = "social/meldung.pdf"
+    _write_transcript(tmp_path, source, "Seite 12345 von 99\nPLZ-ähnliche 54321 im Fließtext.\n")
+    document = _document(
+        sources=[source],
+        body=("## Meldung\n\nGenuine content that never repeats those bare five-digit runs.\n\n_Source: meldung.pdf_"),
+    )
+
+    report = validate_aggregate(document, _DUMMY_PATH, transcripts_root=tmp_path / ".okf-transcripts")
+
+    finding = _identifier_finding(report)
+    assert finding.passed
+    assert report.passed

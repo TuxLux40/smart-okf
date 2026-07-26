@@ -18,8 +18,9 @@ import argparse
 import sys
 from pathlib import Path
 
-from app.config import load_config
+from app.config import load_config, resolve_document_root
 from app.constants import DEFAULT_LLM_HOST, DEFAULT_LLM_MODEL, LLM_LOG_FILENAME
+from app.exceptions import LLMClientError
 from app.services.extraction_options import ExtractionOptions
 from app.services.gating import GatingRules
 from app.services.ingest import IngestFolderResult, ingest_folder
@@ -64,6 +65,14 @@ def main() -> None:
         "this only controls which model checks the extractor's output.",
     )
     parser.add_argument("--quiet", action="store_true", help="Suppress per-file progress output")
+    parser.add_argument(
+        "--allow-model-mismatch",
+        action="store_true",
+        help="Proceed even if the server at --host isn't currently serving the configured "
+        "--model (default: abort). LM Studio/Ollama serve whatever is loaded regardless of "
+        "what's requested by name, so a stale/swapped model otherwise degrades extraction "
+        "silently — not recommended to bypass this outside a deliberate one-off.",
+    )
     args = parser.parse_args()
 
     root = Path(args.folder).expanduser().resolve()
@@ -80,6 +89,12 @@ def main() -> None:
     host: str | None = args.host or (config.llm_host if config is not None else None)
     model: str | None = args.model or (config.llm_model if config is not None else None)
     vision_model: str | None = args.vision_model or (config.vision_model if config is not None else None)
+    # Config-declared generation knobs were previously dead (LLMClient always used
+    # module defaults). Wire them through so .smart-okf/config.yaml actually steers
+    # extraction capacity and sampling. When no config file exists, LLMClient's own
+    # defaults apply (same values as SmartOkfConfig's field defaults).
+    llm_max_tokens = config.llm_max_tokens if config is not None else None
+    llm_temperature = config.llm_temperature if config is not None else None
     # Verify resolution mirrors dream's model/host fallback: CLI flag > verify_* (config/env)
     # > extractor's own resolved host/model. Verification always runs (see extract_document);
     # this only picks which model does the checking.
@@ -103,12 +118,45 @@ def main() -> None:
 
     combined = IngestFolderResult(root=Path(folders[0]))
     for folder in folders:
-        client = LLMClient(model=model, host=host, log_path=Path(folder) / LLM_LOG_FILENAME, vision_model=vision_model)
+        log_path = resolve_document_root(Path(folder)) / LLM_LOG_FILENAME
+        client = (
+            LLMClient(
+                model=model,
+                host=host,
+                log_path=log_path,
+                vision_model=vision_model,
+                max_tokens=llm_max_tokens,
+                temperature=llm_temperature,
+            )
+            if llm_max_tokens is not None and llm_temperature is not None
+            else LLMClient(model=model, host=host, log_path=log_path, vision_model=vision_model)
+        )
         verify_client = (
             client
             if verify_model == model and verify_host == host
-            else LLMClient(model=verify_model, host=verify_host, log_path=Path(folder) / LLM_LOG_FILENAME)
+            else (
+                LLMClient(
+                    model=verify_model,
+                    host=verify_host,
+                    log_path=log_path,
+                    max_tokens=llm_max_tokens,
+                    temperature=llm_temperature,
+                )
+                if llm_max_tokens is not None and llm_temperature is not None
+                else LLMClient(model=verify_model, host=verify_host, log_path=log_path)
+            )
         )
+
+        for candidate in {client, verify_client}:
+            try:
+                candidate.confirm_model_available()
+            except LLMClientError as error:
+                if args.allow_model_mismatch:
+                    print(f"warning: {error}", file=sys.stderr)
+                    continue
+                print(f"error: {error}", file=sys.stderr)
+                sys.exit(1)
+
         result = ingest_folder(
             folder,
             client=client,
@@ -131,7 +179,7 @@ def main() -> None:
             print(f"  {path}: {reason}")
 
     if combined.flagged and not args.quiet:
-        print(f"\n{len(combined.flagged)} file(s) flagged by fact verification (section still written):")
+        print(f"\n{len(combined.flagged)} file(s)/folder(s) flagged (see _Verification: FLAGGED in the written file):")
         for path, reason in combined.flagged:
             print(f"  {path}: {reason}")
 

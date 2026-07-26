@@ -187,7 +187,7 @@ vector DB: it is **whole-tree ripgrep + read + git**, with an explicit fallback 
 | 0 | **Synthesis** (`<root>/synthesis.md`, `type: Synthesis`) | Cross-folder matters, conflicts, patterns, open actions — check first for any question that could span folders; it names the aggregates to read next |
 | 0.5 | **Matter files** (`<root>/matters/*.md`, `type: Matter`) | A specific cross-folder case already resolved to a dedicated file — check here when the synthesis or a shared ID points at one before reading every cited aggregate |
 | 0.8 | **Navigation / roll-up** (root `README.md`; parent `## Subfolders` sections; `type: FolderIndex` files) | Orient in an unfamiliar tree — the root README lists every folder with stats, and each folder with subfolders links down to its children. Use to find *which* aggregate to read, not as a fact source (it links, never duplicates) |
-| 1 | **Aggregates** (`**/*.md` with `type: FolderSummary`) | Distilled facts, tags, orientation summary, provenance — **always start here** for folder-level facts. A `_Verification: FLAGGED — <reason>_` line under a section means that extraction failed its fact check — treat it as untrusted; confirm against the transcript |
+| 1 | **Aggregates** (`**/*.md` with `type: FolderSummary`) | Distilled facts, tags, orientation summary, provenance — **always start here** for folder-level facts. A `_Verification: FLAGGED — <reason>_` line anywhere in the file — under a section (a per-document fact-check failure) or as a banner at the top (a folder-level heuristic failure: fabricated placeholder, missing citations, thin body) — means untrusted; confirm against the transcript. **No such line anywhere = trust the file directly, no extra check needed** (see callout below) |
 | 2 | **Transcripts (mandatory fallback)** (`.okf-transcripts/`) | When MD is thin, partial, or missing a full ID/amount/quote — search here **before** re-ingest or guessing. Hidden folder; greppable; lossless raw extract |
 | 3 | **Git history** | “What’s new,” same-batch uploads, ID-tagged commits months later |
 | 4 | **JSONL** (`.okf-llm-log.jsonl`) | Ingest debugging only — **not** knowledge retrieval |
@@ -196,6 +196,24 @@ Steps 0 and 0.5 exist only after a dream pass has run (see **Dreaming** below); 
 `synthesis.md` is missing or older than recent ingests, offer to run it.
 
 **Transcripts are not optional polish.** Ingest always writes them so agents never need to re-OCR for exact strings. If step 1 does not fully answer the question, you **must** run step 2.
+
+**The whole point of this skill is that you should not have to reopen the original for every
+question** — including precision-critical ones (a government form, a legal deadline, exact
+employment/education date ranges for a Bürgergeld application's tabular Lebenslauf). Ingest
+enforces that automatically now: every extraction runs mandatory per-document fact-verification
+(`render_section`), and every aggregate/matter write additionally runs the same heuristic checks
+`validate_okf.py` uses (`validate_aggregate`) *before* the file is written — a failure on either
+gets baked into the file itself as an in-body `_Verification: FLAGGED — <reason>_` line, not left
+as something you'd only see by separately running a script. So: **a file with no `_Verification:
+FLAGGED` line anywhere is safe to cite directly, original unopened.** Only open the original
+for a file that *is* flagged (or when step 2's transcript still can't answer the question) — that
+minority, not everything, is where "the aggregate said so" isn't good enough yet.
+
+Run `uv run python scripts/validate_okf.py <root>` periodically (already in the cron chain
+below) as a tree-wide health check and to sweep up aggregates written before this guarantee
+existed (old-format files with no banner even though they'd fail validation today) — not as a
+per-query step. A clean `validate_okf.py` run plus zero `_Verification: FLAGGED` hits from `rg`
+is what "the KB can be trusted" concretely means; it should read as confirmation, not busywork.
 
 **Always search the entire documents root**, never just the topically-named folder. Real
 processes cut across the taxonomy (benefits ↔ finances ↔ insurance ↔ providers; utility
@@ -253,25 +271,56 @@ was never committed is invisible to both.
 **git = ingest/version timeline; aggregates = current distilled truth.** No changelogs inside
 every `.md`. Case-event dates from the documents still live in the body as facts.
 
-### Commit messages MUST include unique identifiers
+### Commit message format — derived from the OKF frontmatter shape
 
-When committing after ingest, put **stable IDs and short matter tags** in the commit subject/body
-so agents (and you) can find the same matter months later even across folders:
+A commit message follows the same shape as an OKF document, so the same reflex ("where are
+the identifiers, where are the sources") applies whether you're reading a `.md` or a
+`git log` entry:
+
+```
+<type>: <title>
+
+<description — one or two sentences, the why>
+
+Folders: <relative-path-1>, <relative-path-2>, ...
+IDs: <label>=<value>, <label>=<value>, ...
+```
+
+| Commit field | OKF frontmatter analog | Content |
+|---|---|---|
+| `<type>:` prefix | `type:` | `ingest`, `dream`, `fix`, `cleanup`, `feat`, `chore` |
+| `<title>` | `title:` | one line, imperative, what changed |
+| description paragraph | `description:` | why — what triggered this pass/fix, not a restatement of the diff |
+| `Folders:` trailer | `sources:` | every top-level folder touched, relative to the document root |
+| `IDs:` trailer | (new) `identifiers:` frontmatter field | every stable identifier involved, as `label=value` — same labels the extraction prompt and the identifier-loss validation check use (Kundennummer, Vertragsnummer, Aktenzeichen, Personalnummer, IBAN, …), not free-form prose |
 
 ```bash
-# Good — greppable IDs + folders touched
-git commit -m "Ingest 2026-07-18: ACME-Energy 123456789, TeleNet, InkassoCorp; providers+finances"
+# Good — structured, greppable, matches the aggregate's own vocabulary
+git commit -m "$(cat <<'EOF'
+ingest: capture missing identifiers in social_insurance and pension_insurance
 
-# Weak — date only, no join keys
+Re-ingest after the extraction prompt was fixed to stop dropping footer-block
+identifiers; both folders previously collapsed a second employer into the first.
+
+Folders: insurances/social_insurance, insurances/pension_insurance
+IDs: rentenversicherungsnummer=13040393S105, personalnummer=02093612, betriebsnummer=32268191, betriebsnummer=35306434
+EOF
+)"
+
+# Weak — no structure, nothing greppable, indistinguishable from any other commit
 git commit -m "Ingest: 2026-07-18"
 ```
 
-Harvest IDs from the **new/changed aggregate sections** (and transcripts if needed): contract
-numbers, customer numbers, Aktenzeichen, invoice/case refs, meter IDs, etc. Same IDs should
-already appear in the Markdown bodies (extraction) so `rg` and `git log -S` both work.
+Harvest IDs from the **new/changed aggregate sections'** `identifiers:` frontmatter (and
+transcripts if that frontmatter is missing/pre-migration): contract numbers, customer
+numbers, Aktenzeichen, invoice/case refs, meter IDs, etc. Same IDs should already appear
+in the Markdown bodies (extraction) so `rg`, `git log --grep`, and `git log -S` all work.
 
-Batch uploads → one commit still correlates co-arrival; **IDs in the message** correlate the
-same matter across batches months apart (the other half of “two birds”).
+Batch uploads → one commit still correlates co-arrival; **IDs in the trailer** correlate the
+same matter across batches months apart (the other half of "two birds"). A commit touching
+many unrelated matters (a bulk cleanup pass, say) is better split into one commit per matter
+than crammed into a single `IDs:` trailer with dozens of unrelated values — the trailer stops
+being a useful join key once it's everything.
 
 ```bash
 git -C /path/to/documents log --stat
@@ -299,6 +348,13 @@ plus "and browse it non-recursively" instructions.
 
 Requires an OpenAI-compatible LLM server (LM Studio, llama.cpp `llama-server`, Ollama, vLLM).
 Check reachability before starting: `curl -s $SMART_OKF_LLM_HOST/v1/models`.
+
+**Ingest verifies the configured model is actually loaded before doing any work** (`GET
+/v1/models` against `--host`, compared to `--model`) and aborts with a clear error if not —
+LM Studio/Ollama serve whatever happens to be loaded regardless of what's requested by name,
+so a stale or manually-swapped model would otherwise degrade every extraction in the run
+silently instead of erroring. Pass `--allow-model-mismatch` to proceed anyway (not
+recommended outside a deliberate one-off); this exists as an escape hatch, not a default.
 
 ```bash
 cd /path/to/smart-okf   # skill root — scripts import the app/ package
@@ -330,16 +386,21 @@ uv run python scripts/ingest_folder.py /path/to/documents
   subfolder at a time on first runs and check output quality before continuing. Documents too
   large for a single call (over ~8000 characters of extracted text) are chunked automatically
   and merged back into one aggregate section — this is transparent, no flag needed.
-- Every LLM call (chunked or not) is logged to `<root>/.okf-llm-log.jsonl` — model, duration,
-  retry count, success/failure. Useful for spotting a flaky backend or unusually slow document:
-  `rg '"success": false' /path/to/documents/.okf-llm-log.jsonl`.
+- Every LLM call (chunked or not) is logged to `<root>/.okf-llm-log.jsonl`, where `<root>` is
+  resolved to the true document root (the ancestor holding `.smart-okf/config.yaml`) even if
+  ingest was pointed at a subfolder — one log per document root, not one per invocation, so a
+  subfolder smoke test and a full-tree run share the same file instead of fragmenting it.
+  Logs model, duration, retry count, success/failure. Useful for spotting a flaky backend or
+  unusually slow document: `rg '"success": false' /path/to/documents/.okf-llm-log.jsonl`.
 - [marker](https://github.com/datalab-to/marker)'s `marker_single` is used by default for
   layout-aware PDF extraction (tables, forms) — see Prerequisites in [README.md](README.md).
   Pass `--no-marker` to skip it and use plain pdfplumber/OCRmyPDF instead. If marker was never
   installed and `--no-marker` isn't passed, ingest explicit-fails (not a silent quality
   downgrade) — install it or add the flag.
-- The run reports written aggregates, unchanged folders, and skipped files at the end; relay
-  written + skipped to the user.
+- The run reports written aggregates, unchanged folders, skipped files, and flagged
+  files/folders at the end; relay all of it to the user, not just written + skipped —
+  a flagged file is exactly the "don't trust this one without checking" signal this
+  KB relies on to make every unflagged file safe to cite directly.
 - Cron/systemd-timer use the same command — no daemon, no watcher. Example crontab line:
 
   ```
@@ -400,8 +461,12 @@ uv run python scripts/dream.py /path/to/documents
   facts in the cited aggregate (and its transcripts) before answering from it.
 
 ```cron
-0 3 * * 0  cd /path/to/smart-okf && uv run python scripts/ingest_folder.py /path/to/documents && uv run python scripts/dream.py /path/to/documents
+0 3 * * 0  cd /path/to/smart-okf && uv run python scripts/ingest_folder.py /path/to/documents && uv run python scripts/dream.py /path/to/documents && uv run python scripts/validate_okf.py /path/to/documents
 ```
+
+`validate_okf.py` exits nonzero when anything is flagged, same "cron goes red instead of
+silently green" convention as ingest — put it last in the chain so a bad run surfaces instead
+of quietly leaving a fabricated-looking aggregate in place until someone happens to read it.
 
 ## OpenWebUI integration
 

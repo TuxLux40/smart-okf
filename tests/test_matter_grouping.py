@@ -116,3 +116,30 @@ def test_group_tokens_includes_both_tokens_in_a_chained_group() -> None:
     tokens = group_tokens([Path("a.md"), Path("b.md"), Path("c.md")], digests)
 
     assert tokens == ["111111", "222222"]
+
+
+def test_alphanumeric_reference_token_forms_a_group() -> None:
+    digests = {
+        Path("insurances/social.md"): "Identifiers: versicherungsnummer: 13040393S105",
+        Path("work/employment.md"): "Identifiers: versicherungsnummer: 13040393S105",
+        Path("unrelated.md"): "Identifiers: kundennummer: 999888777",
+    }
+
+    groups = group_by_shared_tokens(digests)
+
+    assert len(groups) == 1
+    assert set(groups[0]) == {Path("insurances/social.md"), Path("work/employment.md")}
+    assert "13040393S105" in extract_numeric_tokens(digests[Path("insurances/social.md")])
+
+
+def test_shared_year_alone_does_not_form_a_group() -> None:
+    # A bare calendar year must never merge two unrelated folders into one matter.
+    digests = {
+        Path("a.md"): "Summary: events in 2023 about ACME",
+        Path("b.md"): "Summary: events in 2023 about Beta Corp",
+    }
+
+    groups = group_by_shared_tokens(digests, min_digits=4)
+
+    assert groups == []
+    assert "2023" not in extract_numeric_tokens("events in 2023", min_digits=4)
