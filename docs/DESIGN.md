@@ -654,6 +654,28 @@ several roots is one cron line per root instead of one line covering a list.
 config is written, and **step 9** writes to `<document_root>/.smart-okf/config.yaml` instead
 of the skill root.
 
+### Planned: sidecar cleanup when a source file is moved or renamed outside ingest
+
+**Problem (not yet fixed).** `.okf-transcripts/<relative-path>.txt` and `.okf-facts/<relative-path>.md`
+mirror the source tree by relative path (see `derive_per_file` and OCR transcript writing in
+`app/services/ingest.py`). When a user moves or renames a source file by hand (mv, a file
+manager, a manual reorg — normal for a git-tracked personal archive, see
+`document-archive-maintenance`), the sidecar at the old path is orphaned: it isn't deleted, and
+a subsequent ingest of the new location writes a fresh sidecar there instead of relocating the
+old one. Two live sidecars end up describing content that only exists once. `source_hashes` on
+the folder aggregate itself isn't affected (each aggregate only tracks its own folder's current
+files), so this doesn't corrupt incremental re-ingest — it's an orphaned-artifact/tidiness gap,
+not a correctness one.
+
+**Not shipped.** No git-mv detection, no hash-based "this orphaned sidecar's content now lives
+at path X" matching, no ingest-time sweep for sidecars whose source no longer exists. Flagged
+by oliver 2026-07-31 while ingesting the real document archive by hand. A real fix needs either
+(a) ingest detecting a sidecar with no matching source and deleting it (simple, loses the old
+extraction on a plain rename — forces re-extraction), or (b) matching an orphaned sidecar to a
+same-hash new source elsewhere in the tree and relocating it (avoids redundant LLM calls, more
+code). Revisit before relying on `.okf-transcripts`/`.okf-facts` as authoritative once documents
+are actively being reorganized post-ingest.
+
 ---
 
 ## Overview
