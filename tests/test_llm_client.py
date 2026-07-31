@@ -170,3 +170,66 @@ def test_confirm_model_available_raises_with_configured_and_actual_models_in_mes
     message = str(excinfo.value)
     assert "google/gemma-4-e4b" in message
     assert "llama-3.2-1b-instruct" in message
+
+
+def test_content_language_unset_leaves_system_prompt_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    client = LLMClient(host="http://127.0.0.1:1")
+    assert client.content_language is None
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        client._client.chat.completions,
+        "create",
+        lambda **kwargs: (captured.update(kwargs), _fake_success())[1],
+    )
+
+    client.extract_structured("raw text")
+
+    messages = captured["messages"]
+    assert "in de" not in messages[0]["content"]  # type: ignore[index]
+    assert "generated framing text" not in messages[0]["content"]  # type: ignore[index]
+
+
+def test_content_language_set_appends_directive_to_extraction_and_dream_prompts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = LLMClient(host="http://127.0.0.1:1", content_language="de")
+    captured: list[str] = []
+
+    def _capture(**kwargs: object) -> SimpleNamespace:
+        messages = kwargs["messages"]
+        captured.append(messages[0]["content"])  # type: ignore[index]
+        return _fake_success()
+
+    monkeypatch.setattr(client._client.chat.completions, "create", _capture)
+
+    client.extract_structured("raw text")
+    client.summarize_sections("merged sections")
+    client.dream_synthesis("digest")
+    client.dream_matter("group text")
+
+    for system_prompt in captured:
+        assert "in de" in system_prompt
+        assert "never translate them" in system_prompt
+
+
+def test_content_language_not_applied_to_fact_verification(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    client = LLMClient(host="http://127.0.0.1:1", content_language="de")
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        client._client.chat.completions,
+        "create",
+        lambda **kwargs: (captured.update(kwargs), _fake_success("OK"))[1],
+    )
+
+    client.verify_facts("source", "extracted")
+
+    messages = captured["messages"]
+    assert "in de" not in messages[0]["content"]  # type: ignore[index]
+
+
+def test_content_language_env_var_sets_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SMART_OKF_CONTENT_LANGUAGE", "fr")
+
+    client = LLMClient(host="http://127.0.0.1:1")
+
+    assert client.content_language == "fr"

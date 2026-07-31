@@ -103,6 +103,14 @@ def test_gating_and_derive_defaults() -> None:
     assert config.generate_readme is True
 
 
+def test_content_language_defaults_to_none() -> None:
+    assert _config().content_language is None
+
+
+def test_content_language_accepts_a_language_code() -> None:
+    assert _config(content_language="de").content_language == "de"
+
+
 def test_config_path_for_root_is_hidden_folder_inside_root(tmp_path: Path) -> None:
     assert config_path_for_root(tmp_path) == tmp_path / ".smart-okf" / "config.yaml"
 

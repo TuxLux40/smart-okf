@@ -71,11 +71,12 @@ def main() -> None:
         priority_patterns=list(config.priority_patterns) if config is not None else [],
     )
     ordering_principle = config.ordering_principle if config is not None else "provenance"
+    content_language = config.content_language if config is not None else None
 
     exit_code = 0
     for folder in folders:
         log_path = resolve_document_root(Path(folder)) / LLM_LOG_FILENAME
-        client = LLMClient(model=model, host=host, log_path=log_path)
+        client = LLMClient(model=model, host=host, log_path=log_path, content_language=content_language)
         try:
             client.confirm_model_available()
         except LLMClientError as mismatch_error:

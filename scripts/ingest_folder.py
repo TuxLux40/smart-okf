@@ -95,6 +95,7 @@ def main() -> None:
     host: str | None = args.host or (config.llm_host if config is not None else None)
     model: str | None = args.model or (config.llm_model if config is not None else None)
     vision_model: str | None = args.vision_model or (config.vision_model if config is not None else None)
+    content_language: str | None = config.content_language if config is not None else None
     # Config-declared generation knobs were previously dead (LLMClient always used
     # module defaults). Wire them through so .smart-okf/config.yaml actually steers
     # extraction capacity and sampling. When no config file exists, LLMClient's own
@@ -131,11 +132,14 @@ def main() -> None:
                 host=host,
                 log_path=log_path,
                 vision_model=vision_model,
+                content_language=content_language,
                 max_tokens=llm_max_tokens,
                 temperature=llm_temperature,
             )
             if llm_max_tokens is not None and llm_temperature is not None
-            else LLMClient(model=model, host=host, log_path=log_path, vision_model=vision_model)
+            else LLMClient(
+                model=model, host=host, log_path=log_path, vision_model=vision_model, content_language=content_language
+            )
         )
         verify_client = (
             client

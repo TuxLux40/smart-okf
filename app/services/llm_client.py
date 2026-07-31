@@ -55,6 +55,7 @@ class LLMClient:
         max_tokens: int = DEFAULT_MAX_TOKENS,
         log_path: Path | None = None,
         vision_model: str | None = None,
+        content_language: str | None = None,
     ) -> None:
         self.model: str = model if model is not None else os.getenv("SMART_OKF_LLM_MODEL", DEFAULT_LLM_MODEL)
         self.host: str = host if host is not None else os.getenv("SMART_OKF_LLM_HOST", DEFAULT_LLM_HOST)
@@ -64,9 +65,29 @@ class LLMClient:
         self.vision_model: str | None = (
             vision_model if vision_model is not None else os.getenv("SMART_OKF_VISION_MODEL")
         )
+        self.content_language: str | None = (
+            content_language if content_language is not None else os.getenv("SMART_OKF_CONTENT_LANGUAGE")
+        )
         self._client = OpenAI(
             base_url=_as_v1_base_url(self.host),
             api_key=api_key or os.getenv("SMART_OKF_LLM_API_KEY", "not-needed"),
+        )
+
+    def _localized(self, system_prompt: str) -> str:
+        """Append a language directive to `system_prompt` when `content_language` is set.
+
+        Only used by callers that generate free prose (extraction, summaries, dream). Never
+        applied to `verify_facts` (its output is a fixed OK/FLAGGED verdict, not prose) — see
+        `content_language`'s docstring in `app/config.py` for what this does and doesn't cover.
+        """
+        if not self.content_language:
+            return system_prompt
+        return (
+            f"{system_prompt}\n\nWrite your own generated framing text — titles, descriptions, "
+            f"tags, orientation summaries, dream synthesis prose — in {self.content_language}, "
+            f"regardless of the source document's language. This does not apply to facts you "
+            f"extract from a source document: keep those faithful to the source's own wording "
+            f"and language, never translate them."
         )
 
     def chat(
@@ -200,13 +221,13 @@ class LLMClient:
 
     def extract_structured(self, raw_text: str, context: str = "") -> str:
         """Extract structured OKF markdown from raw OCR or document text."""
-        system_prompt = load_extraction_prompt()
+        system_prompt = self._localized(load_extraction_prompt())
         user_prompt = f"Context: {context}\n\nRaw content/OCR:\n{raw_text}{DEFAULT_EXTRACTION_USER_SUFFIX}"
         return self.chat(system_prompt, user_prompt)
 
     def summarize_sections(self, merged_sections: str) -> str:
         """Synthesize a short orientation summary (+ optional mermaid timeline) for a folder aggregate."""
-        system_prompt = load_folder_summary_prompt()
+        system_prompt = self._localized(load_folder_summary_prompt())
         return self.chat(system_prompt, merged_sections)
 
     def dream_synthesis(self, digest: str, *, max_tokens: int | None = None) -> str:
@@ -215,7 +236,7 @@ class LLMClient:
         Synthesis output is longer-form than per-document extraction, so callers may raise
         `max_tokens` above the extraction default.
         """
-        system_prompt = load_dream_synthesis_prompt()
+        system_prompt = self._localized(load_dream_synthesis_prompt())
         return self.chat(system_prompt, digest, max_tokens=max_tokens)
 
     def dream_matter(self, group_text: str, *, max_tokens: int | None = None) -> str:
@@ -224,7 +245,7 @@ class LLMClient:
         Only called for candidate groups a cheap non-LLM pre-filter already found sharing a
         reference number (`app/services/matter_grouping.py`) — bounded cost, not O(aggregates).
         """
-        system_prompt = load_dream_matter_prompt()
+        system_prompt = self._localized(load_dream_matter_prompt())
         return self.chat(system_prompt, group_text, max_tokens=max_tokens)
 
     def verify_facts(self, source_text: str, extracted_markdown: str, *, max_tokens: int | None = None) -> str:

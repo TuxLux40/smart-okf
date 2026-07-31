@@ -215,6 +215,18 @@ class SmartOkfConfig(BaseSettings):
     self-updating navigation index with per-folder links and at-a-glance statistics
     (browsable in a file UI / Nextcloud). See `app/services/navigation.py`."""
 
+    content_language: str | None = None
+    """Force the language of LLM-*generated* prose — orientation summaries, aggregate
+    `description`, `tags`, dream synthesis/matter output, image descriptions. None (default):
+    the model infers language from each folder's dominant source-document language (already
+    the prompts' behavior). Set e.g. `de` to pin generated content to one language regardless
+    of source mix — useful for an archive that's overwhelmingly one language but has scattered
+    foreign-language documents that would otherwise pull descriptions/tags into their language.
+    Does NOT translate extracted facts themselves (those follow the source document, per
+    `prompts/extraction_system.md`) and does NOT touch OKF schema field names or `type:` values
+    (`FolderSummary`, `Synthesis`, ...) — those are code-matched constants, always English,
+    per `docs/OKF_SPEC.md`."""
+
     @field_validator("ordering_principle")
     @classmethod
     def validate_ordering_principle(cls, v: str) -> str:
