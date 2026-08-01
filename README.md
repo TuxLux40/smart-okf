@@ -1,3 +1,22 @@
+> **Archived standalone.** smart-okf now lives in the marketplace monorepo:  
+> **[TuxLux40/skills](https://github.com/TuxLux40/skills)** → `skills/smart-okf`.  
+> Prefer that repo for installs and updates; this repository will be archived.
+
+## Install (from marketplace)
+
+```bash
+mkdir -p ~/.claude/skills && curl -fsSL https://github.com/TuxLux40/skills/archive/refs/heads/master.tar.gz | tar -xz --strip-components=2 -C ~/.claude/skills skills-master/skills/smart-okf
+```
+
+Full marketplace (all TuxLux40 skills):
+
+```bash
+# Claude:  claude plugin marketplace add TuxLux40/skills && claude plugin install tuxlux-skills
+# Grok:    grok plugin marketplace add TuxLux40/skills && grok plugin install TuxLux40/skills --trust
+```
+
+---
+
 ## 🧩 The problem & the solution
 
 You have folders full of documents — insurance letters, doctor's reports, contracts, tax forms, government mail and more. Suppose you have a dispute with a utility provider: you need many different information like move-in date, meter reader and bank statements to prove payments. Depending on the topic and the amount of files, compiling these facts by hand can take a *very* long time. Sure, you can ask an AI assistant, but it re-reads the same scanned files from scratch every single time — slowly, and often getting numbers wrong as the context grows. Not to mention how fast you'll burn through tokens.
